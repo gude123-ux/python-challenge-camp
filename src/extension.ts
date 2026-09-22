@@ -19,9 +19,13 @@ import { Curriculum } from './core/curriculum';
 import { Scheduler } from './core/scheduler';
 import { StudyTimer } from './core/timer';
 import { runFile } from './core/runner';
-import { gradeCode, promptAiSetup, generateLevelAnswer } from './core/grader';
+import {
+  gradeCode,
+  promptAiSetup,
+  generateLevelAnswer,
+  extractJson,
+} from './core/grader';
 import { chat, AiError, resolveEndpoint } from './ai/client';
-import { extractJson } from './core/grader';
 import { readConfig, aiReady } from './core/config';
 import type { GradeResult, Level, RunResult, WebviewMessage } from './core/types';
 
