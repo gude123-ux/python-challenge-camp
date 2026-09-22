@@ -142,3 +142,86 @@ export function buildMessages(ctx: PromptContext): Array<{ role: 'system' | 'use
     { role: 'user', content: user },
   ];
 }
+
+// ------------------------------------------------------------------ 参考答案
+
+/**
+ * 「让 AI 讲解本关并给出参考答案」的提示词。
+ *
+ * 与批改不同：这里没有任何学生代码，目标是产出学生能自己对照学习的材料。
+ * 输出是 Markdown 而不是 JSON —— 它要直接给学生看，不需要结构化。
+ */
+const ANSWER_SYSTEM = `你是一位耐心但不说废话的 Python 助教，正在为一位初学者写「本关参考答案与讲解」。
+
+输出要求（严格遵守）：
+- 全中文，Markdown 格式。
+- 按下面的固定结构输出，不要增删大标题。
+- 每道练习都要给出：**这道题在考什么** → **解题思路（分步骤）** → **参考代码**。
+- 参考代码必须是完整、可直接运行的 Python 代码，放在 \`\`\`python 代码块里，并带必要的中文注释。
+- **只能使用本关及之前已经教过的语法**。学生还没学的东西不要用；如果某个更简洁的写法超出当前范围，可以放在「进阶写法」里并注明"以后会学到"。
+- 讲思路时要说清"为什么这么做"，而不只是"抄这段代码"。
+- 最后必须给出【易错点】和【怎么自己验证做对了】两节 —— 让学生有能力自查，而不是只会对答案。
+- 不要寒暄，不要说"希望对你有帮助"，直接开始。`;
+
+function answerLevelSection(level: Level): string {
+  const lines = [
+    `【关卡】第 ${level.day} 关 · ${level.title}`,
+    `【所属章节】第 ${level.chapter} 章 ${level.chapterTitle}`,
+    `【难度】${level.difficulty}/5（星级越高，可用语法范围越宽）`,
+    `【今日目标】${level.goal || '（见知识点）'}`,
+    '',
+    '【知识点简述】',
+    ...level.knowledge.map((k, i) => `${i + 1}. ${k}`),
+  ];
+  if (level.manualExample) {
+    lines.push('', '【示例代码（本关已经给过的参考示例）】', '```python', level.manualExample, '```');
+  }
+  lines.push('', '【本关练习（需要你逐题给出参考答案）】');
+  level.exercises.forEach((e, i) => lines.push(`${i + 1}. ${e}`));
+  if (level.accept) {
+    lines.push('', `【验收标准】${level.accept}`);
+  }
+  if (level.transfer) {
+    lines.push('', `【迁移视角】${level.transfer}`);
+  }
+  return lines.join('\n');
+}
+
+const ANSWER_TEMPLATE = `请按下面这个结构输出：
+
+# 第 N 关参考答案：<关卡标题>
+
+## 一、这一关在练什么
+（三五句话说清本关的核心，以及学完应该能做什么）
+
+## 二、逐题思路与参考答案
+### 练习 1：<题目简述>
+**这道题在考什么**：……
+**思路**：
+1. ……
+2. ……
+**参考代码**：
+\`\`\`python
+# 你的参考实现
+\`\`\`
+
+（练习 2、练习 3 同样格式，逐题写完）
+
+## 三、完整可运行版本
+（把本关所有练习合并成一个可直接运行的脚本，放在一个代码块里）
+
+## 四、易错点
+- ……
+
+## 五、怎么自己验证做对了
+- ……`;
+
+export function buildAnswerMessages(
+  level: Level
+): Array<{ role: 'system' | 'user'; content: string }> {
+  const user = [answerLevelSection(level), '', ANSWER_TEMPLATE].join('\n');
+  return [
+    { role: 'system', content: ANSWER_SYSTEM },
+    { role: 'user', content: user },
+  ];
+}

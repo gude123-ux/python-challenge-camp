@@ -22,6 +22,17 @@ export interface ChatOptions {
   timeoutMs?: number;
 }
 
+export interface ChatResult {
+  /** 模型给出的正文（已归一化为纯字符串） */
+  content: string;
+  /** 结束原因：stop / length / content_filter ... */
+  finishReason?: string;
+  /** 推理模型单独返回的思维链（如果有） */
+  reasoning?: string;
+  usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number };
+  model?: string;
+}
+
 export class AiError extends Error {
   constructor(
     message: string,
@@ -34,6 +45,7 @@ export class AiError extends Error {
       | 'network'
       | 'timeout'
       | 'bad-response'
+      | 'truncated'
       | 'unknown',
     readonly detail?: string
   ) {
@@ -57,13 +69,38 @@ export function resolveEndpoint(baseUrl: string): string {
   return `${base}/v1/chat/completions`;
 }
 
-export async function chat(opts: ChatOptions): Promise<string> {
+/** 把各种形态的 content 归一化成字符串（有的服务返回 [{type:'text',text:'...'}]） */
+function normalizeContent(content: unknown): string {
+  if (typeof content === 'string') {
+    return content;
+  }
+  if (Array.isArray(content)) {
+    return content
+      .map((part: any) => {
+        if (typeof part === 'string') {
+          return part;
+        }
+        if (typeof part?.text === 'string') {
+          return part.text;
+        }
+        if (typeof part?.content === 'string') {
+          return part.content;
+        }
+        return '';
+      })
+      .join('');
+  }
+  return '';
+}
+
+export async function chat(opts: ChatOptions): Promise<ChatResult> {
   if (!opts.apiKey || !opts.apiKey.trim()) {
     throw new AiError('未配置 API Key（pythonCamp.apiKey）', 'no-key');
   }
   const endpoint = resolveEndpoint(opts.baseUrl);
+  const maxTokens = opts.maxTokens ?? 4000;
   const controller = new AbortController();
-  const timeoutMs = opts.timeoutMs ?? 90_000;
+  const timeoutMs = opts.timeoutMs ?? 120_000;
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   let res: Response;
@@ -78,7 +115,7 @@ export async function chat(opts: ChatOptions): Promise<string> {
         model: opts.model,
         messages: opts.messages,
         temperature: opts.temperature ?? 0.2,
-        max_tokens: opts.maxTokens ?? 2000,
+        max_tokens: maxTokens,
         stream: false,
       }),
       signal: controller.signal,
@@ -86,7 +123,10 @@ export async function chat(opts: ChatOptions): Promise<string> {
   } catch (err: any) {
     clearTimeout(timer);
     if (err?.name === 'AbortError') {
-      throw new AiError(`模型响应超时（>${Math.round(timeoutMs / 1000)} 秒）`, 'timeout');
+      throw new AiError(
+        `模型响应超时（>${Math.round(timeoutMs / 1000)} 秒）。推理模型通常较慢，可在设置里调大 pythonCamp.aiTimeoutSec。`,
+        'timeout'
+      );
     }
     throw new AiError(
       `无法连接模型服务：${endpoint}`,
@@ -126,13 +166,48 @@ export async function chat(opts: ChatOptions): Promise<string> {
     throw new AiError('模型返回的不是合法 JSON', 'bad-response', text.slice(0, 600));
   }
 
-  const content: string | undefined =
-    json?.choices?.[0]?.message?.content ??
-    json?.choices?.[0]?.text ??
-    json?.content;
+  const choice = json?.choices?.[0];
+  const finishReason: string | undefined = choice?.finish_reason ?? choice?.finishReason;
+  const content = normalizeContent(choice?.message?.content ?? choice?.text ?? json?.content);
+  const reasoning = normalizeContent(
+    choice?.message?.reasoning_content ?? choice?.message?.reasoning
+  );
+  const usage = json?.usage
+    ? {
+        promptTokens: json.usage.prompt_tokens,
+        completionTokens: json.usage.completion_tokens,
+        totalTokens: json.usage.total_tokens,
+      }
+    : undefined;
 
-  if (!content || typeof content !== 'string') {
+  // 被 max_tokens 截断：这时候正文一定是不完整的 JSON，必须明确报出来，
+  // 否则用户只会看到「无法解析为 JSON」，根本猜不到要调大 max_tokens。
+  if (finishReason === 'length') {
+    throw new AiError(
+      `模型输出被 max_tokens 截断（当前上限 ${maxTokens} token），返回的 JSON 不完整。` +
+        `请在设置里调大 pythonCamp.maxTokens 后重试。`,
+      'truncated',
+      content.slice(-400)
+    );
+  }
+
+  if (!content.trim()) {
+    if (reasoning.trim()) {
+      throw new AiError(
+        `模型只返回了思考过程、没有正文，通常也是 max_tokens 被推理过程耗尽（当前上限 ${maxTokens}）。` +
+          `请调大 pythonCamp.maxTokens 后重试。`,
+        'truncated',
+        reasoning.slice(-400)
+      );
+    }
     throw new AiError('模型返回内容为空', 'bad-response', text.slice(0, 600));
   }
-  return content;
+
+  return {
+    content,
+    finishReason,
+    reasoning: reasoning || undefined,
+    usage,
+    model: json?.model,
+  };
 }

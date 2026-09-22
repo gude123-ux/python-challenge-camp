@@ -17,6 +17,10 @@ export interface CampConfig {
   runTimeoutSec: number;
   trackStudyTime: boolean;
   strictMode: boolean;
+  /** 单次调用允许模型输出的最大 token 数 */
+  maxTokens: number;
+  /** 模型响应超时（秒）。推理模型需要给足时间。 */
+  aiTimeoutSec: number;
 }
 
 export function readConfig(): CampConfig {
@@ -34,6 +38,8 @@ export function readConfig(): CampConfig {
     runTimeoutSec: c.get<number>('runTimeoutSec') ?? 20,
     trackStudyTime: c.get<boolean>('trackStudyTime') ?? true,
     strictMode: c.get<boolean>('strictMode') ?? false,
+    maxTokens: c.get<number>('maxTokens') ?? 4000,
+    aiTimeoutSec: c.get<number>('aiTimeoutSec') ?? 120,
   };
 }
 

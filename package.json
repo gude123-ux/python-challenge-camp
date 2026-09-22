@@ -2,7 +2,7 @@
   "name": "python-challenge-camp",
   "displayName": "Python闯关训练营",
   "description": "通用 Python 学习闯关系统框架：每日任务派发、关卡解锁、AI 自动批改、进度追踪，全部数据保存在本地工作区。题库可替换为任意课程内容。",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "gude123-ux",
   "license": "MIT",
   "engines": {
@@ -107,6 +107,18 @@
         "title": "配置 API Key 与模型",
         "category": "Python闯关训练营",
         "icon": "$(settings-gear)"
+      },
+      {
+        "command": "pythonCamp.testConnection",
+        "title": "测试 AI 连接",
+        "category": "Python闯关训练营",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "pythonCamp.explainLevel",
+        "title": "AI 讲解本关（含参考答案）",
+        "category": "Python闯关训练营",
+        "icon": "$(lightbulb)"
       },
       {
         "command": "pythonCamp.resetAll",
@@ -241,6 +253,22 @@
           "default": false,
           "description": "严格模式：AI 批改评分标准更严，代码质量占比更高。",
           "order": 12
+        },
+        "pythonCamp.maxTokens": {
+          "type": "number",
+          "default": 4000,
+          "minimum": 500,
+          "maximum": 32000,
+          "description": "单次调用允许模型输出的最大 token 数。如果提示「输出被截断 / JSON 不完整」，把这里调大（比如 8000）。",
+          "order": 13
+        },
+        "pythonCamp.aiTimeoutSec": {
+          "type": "number",
+          "default": 120,
+          "minimum": 20,
+          "maximum": 900,
+          "description": "模型响应超时（秒）。推理模型（gpt-5.x、deepseek-reasoner 等）思考较慢，建议 180~300。",
+          "order": 14
         }
       }
     }

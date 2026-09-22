@@ -76,6 +76,17 @@ export function levelFileUri(context: vscode.ExtensionContext, level: Level): vs
   return vscode.Uri.file(levelFilePath(context, level));
 }
 
+/** AI 生成的参考答案目录（放在学生代码目录旁边，方便对照） */
+export function answerDir(context: vscode.ExtensionContext): string {
+  return path.join(workDir(context), '参考答案');
+}
+
+/** 某一关的参考答案文件路径（Markdown） */
+export function answerFilePath(context: vscode.ExtensionContext, level: Level): string {
+  const name = `第${String(level.day).padStart(2, '0')}关_参考答案.md`;
+  return path.join(answerDir(context), name);
+}
+
 export function todayKey(d: Date = new Date()): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');

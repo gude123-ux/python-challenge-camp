@@ -106,6 +106,8 @@ async function main() {
     'pythonCamp.runTimeoutSec',
     'pythonCamp.trackStudyTime',
     'pythonCamp.strictMode',
+    'pythonCamp.maxTokens',
+    'pythonCamp.aiTimeoutSec',
   ];
   const undeclared = codeKeys.filter((k) => !declaredProps.includes(k));
   ok(undeclared.length === 0, `代码读取的 ${codeKeys.length} 个配置项都已在 package.json 声明`, undeclared.join(','));

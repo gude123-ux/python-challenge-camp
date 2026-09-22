@@ -196,6 +196,44 @@ async function main(): Promise<void> {
   ok(over?.score === 100 && over?.correctness === 0 && over?.quality === 100, '分数越界被钳制到 0-100');
   ok(extractJson('no json here') === null, 'extractJson 对无 JSON 文本返回 null');
 
+  // ---- 回归：提示词要求 suggestions 里给出 markdown 代码块，
+  //      于是**合法 JSON 的字符串内部会包含 ```**。
+  //      早期解析器用非贪婪正则 /```(?:json)?\s*([\s\S]*?)```/ 剥围栏，
+  //      会从第一个 ``` 一路匹配到内层代码块的 ```，只抠出几十字符碎片，
+  //      把一份本来完全正确的 JSON 判成「无法解析」。
+  const nestedFence = JSON.stringify({
+    score: 82,
+    runnable: true,
+    correctness: 85,
+    quality: 78,
+    summary: '整体不错',
+    strengths: ['结构清晰'],
+    issues: ['变量名可以更具体'],
+    suggestions: ['可以改成这样：\n```python\nfor i in range(3):\n    print(i)\n```'],
+    weakTags: ['range'],
+    exerciseChecks: [{ index: 1, done: true, comment: '完成' }],
+  });
+  const rn = normalizeAiResult(nestedFence, level);
+  ok(!!rn && rn.score === 82, 'JSON 字符串内含 markdown 代码块时仍能解析（回归）', String(rn?.score));
+  ok(rn?.suggestions.length === 1, '嵌套代码块的建议被完整保留', String(rn?.suggestions.length));
+
+  const wrapped = '```json\n' + nestedFence + '\n```';
+  const rw = normalizeAiResult(wrapped, level);
+  ok(!!rw && rw.score === 82, '带 ```json 外层围栏 + 内层代码块也能解析（回归）', String(rw?.score));
+
+  const braceInString =
+    '{"score": 70, "runnable": true, "correctness": 70, "quality": 70, "summary": "用 f-string 写 {name} 会更好"}';
+  const rb = normalizeAiResult(braceInString, level);
+  ok(!!rb && rb.score === 70, '字符串内含花括号不会被误判为对象结束');
+
+  const truncated =
+    '{"score": 60, "runnable": true, "correctness": 60, "quality": 60, "summary": "被截';
+  ok(extractJson(truncated) === null, '被截断的 JSON 返回 null 而不是抛异常');
+  ok(
+    extractJson('```json\n{"score": 1, "note": "含 ``` 的字符串"}\n```') !== null,
+    '围栏内含反引号也能解析'
+  );
+
   // ---------------------------------------------------------- 5. 本地评分
   section('5. 本地启发式评分');
   const goodRun: RunResult = {

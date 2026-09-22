@@ -126,6 +126,7 @@ function render() {
     '<button class="primary" data-act="openFile">' + (S.fileExists ? '打开代码文件' : '创建代码文件并开始') + '</button>' +
     '<button data-act="run">本地运行</button>' +
     '<button data-act="submit">提交并批改</button>' +
+    '<button data-act="answer">AI 讲解 / 看参考答案</button>' +
     (S.prev ? '<button data-act="prev">上一关</button>' : '') +
     (S.next ? '<button data-act="next">下一关</button>' : '') +
     '</div>';

@@ -19,14 +19,23 @@ import { Curriculum } from './core/curriculum';
 import { Scheduler } from './core/scheduler';
 import { StudyTimer } from './core/timer';
 import { runFile } from './core/runner';
-import { gradeCode, promptAiSetup } from './core/grader';
+import { gradeCode, promptAiSetup, generateLevelAnswer } from './core/grader';
+import { chat, AiError, resolveEndpoint } from './ai/client';
+import { extractJson } from './core/grader';
 import { readConfig, aiReady } from './core/config';
 import type { GradeResult, Level, RunResult, WebviewMessage } from './core/types';
 
 import { SidebarProvider } from './panels/sidebar';
 import { LevelPanel } from './panels/levelPanel';
 import { ViewModelBuilder } from './panels/viewModel';
-import { levelFileUri, reportFilePath, humanDuration, todayKey } from './util/paths';
+import {
+  levelFileUri,
+  reportFilePath,
+  humanDuration,
+  todayKey,
+  answerFilePath,
+  answerDir,
+} from './util/paths';
 
 let store: ProgressStore;
 let curriculum: Curriculum;
@@ -35,6 +44,8 @@ let timer: StudyTimer;
 let vmb: ViewModelBuilder;
 let sidebar: SidebarProvider;
 let statusBar: vscode.StatusBarItem;
+/** AI 诊断日志（测试连接、调用失败时的详细信息） */
+let aiLog: vscode.OutputChannel;
 
 /** 当前正在操作的关卡 */
 let currentLevelId: string | undefined;
@@ -85,6 +96,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   statusBar.command = 'pythonCamp.openPanel';
   context.subscriptions.push(statusBar);
   refreshStatusBar();
+
+  aiLog = vscode.window.createOutputChannel('Python闯关训练营');
+  context.subscriptions.push(aiLog);
 
   registerCommands(context);
 
@@ -264,6 +278,19 @@ function registerCommands(context: vscode.ExtensionContext): void {
     );
   });
 
+  reg('pythonCamp.testConnection', async () => {
+    await testConnection();
+  });
+
+  reg('pythonCamp.explainLevel', async () => {
+    const level = resolveAnyLevel();
+    if (!level) {
+      void vscode.window.showWarningMessage('先打开一个关卡（或打开带「第N关」的 .py 文件），再让我解答。');
+      return;
+    }
+    await explainLevel(level, context);
+  });
+
   reg('pythonCamp.resetAll', async () => {
     const pick = await vscode.window.showWarningMessage(
       '确定要清空全部闯关进度吗？此操作不可撤销（会删除 .pythoncamp/progress.json 的内容）。',
@@ -355,6 +382,9 @@ async function handlePanelAction(
       break;
     case 'submit':
       await submitLevel(level, context);
+      break;
+    case 'answer':
+      await explainLevel(level, context);
       break;
     case 'prev': {
       const p = curriculum.previousOf(level.id);
@@ -476,6 +506,8 @@ async function submitLevel(
         enableAI: aiReady(cfg),
         strictMode: cfg.strictMode,
         weakPoints: store.weakRanking(5).map((w) => w.tag),
+        maxTokens: cfg.maxTokens,
+        timeoutSec: cfg.aiTimeoutSec,
       });
 
       const result = outcome.result;
@@ -547,6 +579,266 @@ async function submitLevel(
         }
       } else {
         void vscode.window.showWarningMessage(msg);
+      }
+    }
+  );
+}
+
+// ------------------------------------------------------------------ AI 诊断与解答
+
+/** 把 AiError 的错误类型翻译成「下一步该干什么」 */
+function aiErrorAdvice(err: unknown): string {
+  if (!(err instanceof AiError)) {
+    return String((err as any)?.message ?? err);
+  }
+  const base = `${err.message}${err.detail ? `\n${err.detail}` : ''}`;
+  const hint: Record<string, string> = {
+    'no-key': '→ 到设置里填 pythonCamp.apiKey。',
+    auth: '→ Key 可能填错、已失效或没额度，换一个再试。',
+    'not-found': '→ 检查 pythonCamp.apiBaseUrl 是否要带 /v1，以及 pythonCamp.model 名字对不对。',
+    'rate-limit': '→ 等一会儿再试，或换 Key / 换模型。',
+    server: '→ 是模型服务端的问题，稍后重试；持续失败就换个服务地址。',
+    network: '→ 网络不通或地址写错。先用浏览器/curl 确认这个地址能访问。',
+    timeout: '→ 推理模型很慢，把 pythonCamp.aiTimeoutSec 调大（比如 300）。',
+    truncated: '→ 把 pythonCamp.maxTokens 调大（比如 8000）。',
+    'bad-response': '→ 服务返回的格式不是标准 OpenAI 格式，换一个兼容端点试试。',
+  };
+  return `${base}\n${hint[err.kind] ?? ''}`.trim();
+}
+
+/**
+ * 「测试连接」：把配置、端点、网络、以及**能否解析出 JSON** 逐项验一遍。
+ *
+ * 最后一项是刻意加的 —— 这次踩过的坑就是「HTTP 通了、模型也正常返回了，
+ * 但解析器把 JSON 弄坏了」，只测 HTTP 是发现不了的。
+ */
+async function testConnection(): Promise<void> {
+  const cfg = readConfig();
+  aiLog.show(true);
+  aiLog.appendLine('');
+  aiLog.appendLine(`===== 测试连接 · ${new Date().toLocaleString()} =====`);
+
+  let endpoint = '';
+  let endpointError = '';
+  try {
+    endpoint = resolveEndpoint(cfg.apiBaseUrl);
+  } catch (e) {
+    endpointError = String((e as any)?.message ?? e);
+  }
+
+  aiLog.appendLine(`服务地址  : ${cfg.apiBaseUrl || '(空)'}`);
+  aiLog.appendLine(`解析端点  : ${endpoint || `(无法解析：${endpointError})`}`);
+  aiLog.appendLine(`模型      : ${cfg.model || '(空)'}`);
+  aiLog.appendLine(
+    `API Key   : ${cfg.apiKey ? `${cfg.apiKey.slice(0, 6)}…（共 ${cfg.apiKey.length} 字符）` : '(空)'}`
+  );
+  aiLog.appendLine(`maxTokens : ${cfg.maxTokens}    超时 : ${cfg.aiTimeoutSec}s`);
+
+  const problems: string[] = [];
+  if (!cfg.enableAI) {
+    problems.push('pythonCamp.enableAI = false（AI 批改总开关关着）');
+  }
+  if (!cfg.apiKey) {
+    problems.push('pythonCamp.apiKey 为空');
+  }
+  if (!cfg.apiBaseUrl) {
+    problems.push('pythonCamp.apiBaseUrl 为空');
+  }
+  if (!cfg.model) {
+    problems.push('pythonCamp.model 为空');
+  }
+  if (endpointError) {
+    problems.push(`服务地址无法解析：${endpointError}`);
+  }
+
+  if (problems.length) {
+    aiLog.appendLine('');
+    aiLog.appendLine('配置不完整：');
+    for (const p of problems) {
+      aiLog.appendLine(`  ✗ ${p}`);
+    }
+    const pick = await vscode.window.showWarningMessage(
+      `AI 配置不完整：${problems[0]}`,
+      '打开设置',
+      '知道了'
+    );
+    if (pick === '打开设置') {
+      await vscode.commands.executeCommand('pythonCamp.openSettings');
+    }
+    return;
+  }
+
+  aiLog.appendLine('');
+  aiLog.appendLine('发出一次最小请求（要求模型回 JSON）…');
+
+  const started = Date.now();
+  try {
+    const reply = await chat({
+      baseUrl: cfg.apiBaseUrl,
+      apiKey: cfg.apiKey,
+      model: cfg.model,
+      messages: [
+        { role: 'system', content: '你是测试助手。只输出 JSON，不要输出任何解释文字。' },
+        { role: 'user', content: '请原样输出这个 JSON：{"ok": true, "msg": "连接正常"}' },
+      ],
+      temperature: 0,
+      maxTokens: 512,
+      timeoutMs: Math.max(20, cfg.aiTimeoutSec) * 1000,
+    });
+    const ms = Date.now() - started;
+
+    aiLog.appendLine(`  ✓ HTTP 请求成功（${ms} ms）`);
+    aiLog.appendLine(`  ✓ 实际模型 : ${reply.model ?? '(服务未返回)'}`);
+    aiLog.appendLine(`  ✓ 结束原因 : ${reply.finishReason ?? '(未返回)'}`);
+    if (reply.usage) {
+      aiLog.appendLine(
+        `  ✓ token    : 输入 ${reply.usage.promptTokens ?? '?'} / 输出 ${reply.usage.completionTokens ?? '?'}`
+      );
+    }
+
+    // 关键一步：模型回了内容 ≠ 我们能用。这里顺便验证解析链路。
+    const parsed = extractJson(reply.content);
+    if (parsed) {
+      aiLog.appendLine('  ✓ 返回内容能解析为 JSON');
+      aiLog.appendLine(`  原始返回：${reply.content.trim().slice(0, 200)}`);
+      aiLog.appendLine('结论：一切正常，AI 批改应该可以工作。');
+      void vscode.window.showInformationMessage(
+        `AI 连接正常（${ms} ms，模型 ${cfg.model}）。批改与求解答都可以用了。`
+      );
+    } else {
+      aiLog.appendLine('  ✗ 返回内容无法解析为 JSON');
+      aiLog.appendLine('  原始返回（前 600 字符）：');
+      aiLog.appendLine(reply.content.slice(0, 600));
+      aiLog.appendLine('结论：HTTP 通了，但解析链路有问题 —— 请把上面的原始返回发给我。');
+      void vscode.window.showWarningMessage(
+        '连接成功，但返回内容解析不出 JSON。详情见「输出」面板的「Python闯关训练营」通道。'
+      );
+    }
+  } catch (err) {
+    const ms = Date.now() - started;
+    const advice = aiErrorAdvice(err);
+    aiLog.appendLine(`  ✗ 失败（${ms} ms）`);
+    aiLog.appendLine(advice);
+    aiLog.appendLine('结论：连接不通过，AI 批改会退回到本地评分。');
+    const pick = await vscode.window.showErrorMessage(
+      `AI 连接失败：${advice.split('\n')[0]}`,
+      '打开设置',
+      '查看日志'
+    );
+    if (pick === '打开设置') {
+      await vscode.commands.executeCommand('pythonCamp.openSettings');
+    } else if (pick === '查看日志') {
+      aiLog.show(true);
+    }
+  }
+}
+
+/** 尽量推断「现在该解答哪一关」：当前编辑器 → 上次打开的关卡 → 今日任务第一关 */
+function resolveAnyLevel(): Level | undefined {
+  const editor = vscode.window.activeTextEditor;
+  if (editor?.document.languageId === 'python') {
+    const lv = resolveLevelForDocument(editor.document);
+    if (lv) {
+      currentLevelId = lv.id;
+      return lv;
+    }
+  }
+  if (currentLevelId) {
+    const lv = curriculum.get(currentLevelId);
+    if (lv) {
+      return lv;
+    }
+  }
+  return scheduler.todayLevels()[0];
+}
+
+/** 用系统默认的 Markdown 预览打开参考答案；预览不可用时退回源码视图 */
+async function openAnswerPreview(file: string): Promise<void> {
+  const uri = vscode.Uri.file(file);
+  try {
+    await vscode.commands.executeCommand('markdown.showPreviewToSide', uri);
+  } catch {
+    const doc = await vscode.workspace.openTextDocument(uri);
+    await vscode.window.showTextDocument(doc, { preview: false, viewColumn: vscode.ViewColumn.Beside });
+  }
+}
+
+/**
+ * 让 AI 讲解某一关并给出参考答案。
+ *
+ * 生成结果落盘成 Markdown（`python-camp/参考答案/第NN关_参考答案.md`），
+ * 而不是只弹一次 —— 这样学生能反复看、能离线看、也能自己批注。
+ * 已经生成过就直接打开，避免重复烧 token。
+ */
+async function explainLevel(
+  level: Level,
+  context: vscode.ExtensionContext,
+  force = false
+): Promise<void> {
+  const cfg = readConfig();
+  const file = answerFilePath(context, level);
+
+  if (!force && existsSync(file)) {
+    await openAnswerPreview(file);
+    const pick = await vscode.window.showInformationMessage(
+      `第 ${level.day} 关的参考答案已经生成过了，已为你打开。`,
+      '重新生成'
+    );
+    if (pick === '重新生成') {
+      await explainLevel(level, context, true);
+    }
+    return;
+  }
+
+  if (!aiReady(cfg)) {
+    await promptAiSetup('生成参考答案需要配置 API Key。要不要现在配置？');
+    return;
+  }
+
+  await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: `AI 正在解答第 ${level.day} 关…（推理模型可能要几十秒）`,
+      cancellable: false,
+    },
+    async () => {
+      try {
+        const md = await generateLevelAnswer(level, {
+          apiKey: cfg.apiKey,
+          apiBaseUrl: cfg.apiBaseUrl,
+          model: cfg.model,
+          maxTokens: cfg.maxTokens,
+          timeoutSec: cfg.aiTimeoutSec,
+        });
+
+        const header = [
+          `> 本文件由 AI 生成于 ${new Date().toLocaleString()}，仅供对照学习，不保证唯一解。`,
+          '> 建议先自己写完再打开看，效果差别很大。',
+          '',
+          `**关卡**：第 ${level.day} 关 · ${level.title}　　**模型**：${cfg.model}`,
+          '',
+          '---',
+          '',
+        ].join('\n');
+
+        await fs.mkdir(answerDir(context), { recursive: true });
+        await fs.writeFile(file, `${header}${md}\n`, 'utf8');
+        await openAnswerPreview(file);
+        aiLog.appendLine(`[参考答案] 第 ${level.day} 关已生成：${file}`);
+        void vscode.window.showInformationMessage(`第 ${level.day} 关参考答案已生成。`);
+      } catch (err) {
+        const advice = aiErrorAdvice(err);
+        aiLog.appendLine(`[参考答案失败] 第 ${level.day} 关：${advice}`);
+        const pick = await vscode.window.showErrorMessage(
+          `生成参考答案失败：${advice.split('\n')[0]}`,
+          '测试连接',
+          '查看日志'
+        );
+        if (pick === '测试连接') {
+          await testConnection();
+        } else if (pick === '查看日志') {
+          aiLog.show(true);
+        }
       }
     }
   );
