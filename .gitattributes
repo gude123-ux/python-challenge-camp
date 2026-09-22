@@ -1,0 +1,14 @@
+# 换行规则显式声明，不依赖各人的 core.autocrlf 设置。
+#
+# 这条很重要：launch.cmd / 桌面启动器如果是 LF 换行，
+# Windows 批处理的 `goto :label` 和多行 `if (...)` 块会直接失效。
+# 显式钉成 CRLF，无论谁 clone 到哪个平台都不会退化。
+* text=auto eol=lf
+
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# 二进制资源，别做换行转换
+*.png binary
+*.ico binary
+*.vsix binary
