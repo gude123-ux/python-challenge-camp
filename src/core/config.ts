@@ -23,6 +23,8 @@ export interface CampConfig {
   aiTimeoutSec: number;
   /** 返回的 JSON 结构损坏时是否自动重试一次 */
   retryOnBadJson: boolean;
+  /** 本地运行失败后是否自动让 AI 分析报错原因 */
+  autoDiagnoseOnError: boolean;
 }
 
 export function readConfig(): CampConfig {
@@ -43,6 +45,7 @@ export function readConfig(): CampConfig {
     maxTokens: c.get<number>('maxTokens') ?? 4000,
     aiTimeoutSec: c.get<number>('aiTimeoutSec') ?? 120,
     retryOnBadJson: c.get<boolean>('retryOnBadJson') ?? true,
+    autoDiagnoseOnError: c.get<boolean>('autoDiagnoseOnError') ?? true,
   };
 }
 

@@ -16,6 +16,7 @@ const EXTRA_CSS = `
 .meta { font-size: 11px; color: var(--vscode-descriptionForeground); margin-bottom: 12px; }
 .actions { display: flex; flex-wrap: wrap; gap: 7px; margin: 12px 0 16px; }
 .actions button { padding: 6px 13px; font-size: 12px; }
+.actions button.warnbtn { background: rgba(220,80,80,.18); color: var(--vscode-charts-red, #dc5050); }
 h3.blk {
   font-size: 13px; margin: 18px 0 8px; padding-left: 9px;
   border-left: 3px solid var(--vscode-focusBorder, #2f7fe0);
@@ -127,6 +128,9 @@ function render() {
     '<button data-act="run">本地运行</button>' +
     '<button data-act="submit">提交并批改</button>' +
     '<button data-act="answer">AI 讲解 / 看参考答案</button>' +
+    '<button data-act="solutions">多种解法</button>' +
+    '<button data-act="ask">问 AI 助教</button>' +
+    (S.runFailed ? '<button class="warnbtn" data-act="diagnose">AI 分析报错</button>' : '') +
     (S.prev ? '<button data-act="prev">上一关</button>' : '') +
     (S.next ? '<button data-act="next">下一关</button>' : '') +
     '</div>';
@@ -153,6 +157,10 @@ function render() {
         const d = (a.at || '').slice(5, 16).replace('T', ' ');
         return '<span class="h">' + d + ' · ' + a.score + ' 分' + (a.source === 'local' ? '（本地）' : '') + '</span>';
       }).join('') + '</div>';
+  }
+
+  if (S.diagnosisHtml) {
+    h += '<h3 class="blk">AI 报错分析</h3><div class="card md">' + S.diagnosisHtml + '</div>';
   }
 
   if (S.run) h += runBlock(S.run);

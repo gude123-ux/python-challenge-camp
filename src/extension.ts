@@ -19,19 +19,25 @@ import { Curriculum } from './core/curriculum';
 import { Scheduler } from './core/scheduler';
 import { StudyTimer } from './core/timer';
 import { runFile } from './core/runner';
+import { gradeCode, promptAiSetup, extractJson } from './core/grader';
 import {
-  gradeCode,
-  promptAiSetup,
   generateLevelAnswer,
-  extractJson,
-} from './core/grader';
+  generateErrorDiagnosis,
+  generateAlternativeSolutions,
+  askAssistant,
+} from './ai/tasks';
 import { chat, AiError, resolveEndpoint } from './ai/client';
 import { readConfig, aiReady } from './core/config';
+import type { CampConfig } from './core/config';
 import type { GradeResult, Level, RunResult, WebviewMessage } from './core/types';
 
 import { SidebarProvider } from './panels/sidebar';
 import { LevelPanel } from './panels/levelPanel';
+import { ChatPanel } from './panels/chatPanel';
+import type { ChatMessageModel } from './panels/chatPanel';
+import { renderMarkdown } from './panels/html';
 import { ViewModelBuilder } from './panels/viewModel';
+import type { TextTaskOptions } from './ai/tasks';
 import {
   levelFileUri,
   reportFilePath,
@@ -39,6 +45,8 @@ import {
   todayKey,
   answerFilePath,
   answerDir,
+  solutionsFilePath,
+  stateDir,
 } from './util/paths';
 
 let store: ProgressStore;
@@ -50,6 +58,14 @@ let sidebar: SidebarProvider;
 let statusBar: vscode.StatusBarItem;
 /** AI 诊断日志（测试连接、调用失败时的详细信息） */
 let aiLog: vscode.OutputChannel;
+
+/** 最近一次 AI 报错分析（Markdown），渲染在关卡详情页 */
+let lastDiagnosis: { levelId: string; markdown: string } | null = null;
+
+/** 问答面板与对话历史（存在扩展侧，面板关掉再开不丢） */
+let chatPanel: ChatPanel | undefined;
+let chatHistory: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+let chatDisplay: ChatMessageModel[] = [];
 
 /** 当前正在操作的关卡 */
 let currentLevelId: string | undefined;
@@ -295,6 +311,28 @@ function registerCommands(context: vscode.ExtensionContext): void {
     await explainLevel(level, context);
   });
 
+  reg('pythonCamp.multipleSolutions', async () => {
+    const level = resolveAnyLevel();
+    if (!level) {
+      void vscode.window.showWarningMessage('先打开一个关卡（或打开带「第N关」的 .py 文件），再让我列解法。');
+      return;
+    }
+    await multipleSolutions(level, context);
+  });
+
+  reg('pythonCamp.diagnoseError', async () => {
+    const level = resolveAnyLevel();
+    if (!level) {
+      void vscode.window.showWarningMessage('先打开一个关卡（或打开带「第N关」的 .py 文件），再让我分析报错。');
+      return;
+    }
+    await diagnoseError(level, context);
+  });
+
+  reg('pythonCamp.askQuestion', async () => {
+    await openChatPanel(context);
+  });
+
   reg('pythonCamp.resetAll', async () => {
     const pick = await vscode.window.showWarningMessage(
       '确定要清空全部闯关进度吗？此操作不可撤销（会删除 .pythoncamp/progress.json 的内容）。',
@@ -338,6 +376,8 @@ async function openLevel(level: Level, context: vscode.ExtensionContext): Promis
   currentLevelId = level.id;
   lastGrade = null;
   lastRun = null;
+  lastDiagnosis = null;
+  chatPanel?.setContext(chatContextLabel(level));
 
   const uri = await ensureLevelFile(context, level);
   const doc = await vscode.workspace.openTextDocument(uri);
@@ -360,7 +400,10 @@ function showLevelPanel(level: Level, context: vscode.ExtensionContext, reveal =
     void handlePanelAction(type, level, context);
   });
   const exists = existsSync(uri.fsPath);
-  const model = vmb.buildLevelDetail(level, cfg, exists, lastGrade, lastRun);
+  // 报错分析只对「它所属的那一关」有效，换关就不要再显示上一关的结论
+  const diagnosis =
+    lastDiagnosis && lastDiagnosis.levelId === level.id ? lastDiagnosis.markdown : null;
+  const model = vmb.buildLevelDetail(level, cfg, exists, lastGrade, lastRun, diagnosis);
   model.filePath = uri.fsPath;
   panel.setModel(model);
   if (reveal) {
@@ -389,6 +432,16 @@ async function handlePanelAction(
       break;
     case 'answer':
       await explainLevel(level, context);
+      break;
+    case 'solutions':
+      await multipleSolutions(level, context);
+      break;
+    case 'diagnose':
+      await diagnoseError(level, context);
+      break;
+    case 'ask':
+      currentLevelId = level.id;
+      await openChatPanel(context, level);
       break;
     case 'prev': {
       const p = curriculum.previousOf(level.id);
@@ -449,6 +502,10 @@ async function runLevel(
         void vscode.window.showWarningMessage(
           `第 ${level.day} 关运行失败 ${kind}${result.timedOut ? '（超时）' : ''}。详情见关卡页。`
         );
+        // 自动分析报错：直接复用刚才这次运行结果，不重复跑一遍
+        if (cfg.autoDiagnoseOnError && aiReady(cfg)) {
+          await diagnoseError(level, context, { run: result, quiet: true });
+        }
       }
     }
   );
@@ -832,21 +889,305 @@ async function explainLevel(
         aiLog.appendLine(`[参考答案] 第 ${level.day} 关已生成：${file}`);
         void vscode.window.showInformationMessage(`第 ${level.day} 关参考答案已生成。`);
       } catch (err) {
-        const advice = aiErrorAdvice(err);
-        aiLog.appendLine(`[参考答案失败] 第 ${level.day} 关：${advice}`);
-        const pick = await vscode.window.showErrorMessage(
-          `生成参考答案失败：${advice.split('\n')[0]}`,
-          '测试连接',
-          '查看日志'
+        await reportAiTaskError('生成参考答案', err);
+      }
+    }
+  );
+}
+
+// -------------------------------------------------- 多种解法 / 报错分析 / 问答
+
+/** 读取某一关的代码文件内容（不存在或读不到就返回空串） */
+async function readLevelCode(context: vscode.ExtensionContext, level: Level): Promise<string> {
+  try {
+    return await fs.readFile(levelFileUri(context, level).fsPath, 'utf8');
+  } catch {
+    return '';
+  }
+}
+
+/** 长文本 AI 任务的调用参数（从设置里取） */
+function aiTaskOptions(cfg: CampConfig): TextTaskOptions {
+  return {
+    apiKey: cfg.apiKey,
+    apiBaseUrl: cfg.apiBaseUrl,
+    model: cfg.model,
+    maxTokens: cfg.maxTokens,
+    timeoutSec: cfg.aiTimeoutSec,
+  };
+}
+
+/** 统一的「AI 任务失败」处理：写日志 + 给可操作的下一步 */
+async function reportAiTaskError(what: string, err: unknown): Promise<void> {
+  const advice = aiErrorAdvice(err);
+  aiLog.appendLine(`[${what}失败] ${advice}`);
+  const pick = await vscode.window.showErrorMessage(
+    `${what}失败：${advice.split('\n')[0]}`,
+    '测试连接',
+    '查看日志'
+  );
+  if (pick === '测试连接') {
+    await testConnection();
+  } else if (pick === '查看日志') {
+    aiLog.show(true);
+  }
+}
+
+/**
+ * AI 列出同一道题的多种解法，落盘成 Markdown 并打开预览。
+ * 和参考答案同目录、同样「已存在就直接打开」，避免重复烧 token。
+ */
+async function multipleSolutions(
+  level: Level,
+  context: vscode.ExtensionContext,
+  force = false
+): Promise<void> {
+  const cfg = readConfig();
+  const file = solutionsFilePath(context, level);
+
+  if (!force && existsSync(file)) {
+    await openAnswerPreview(file);
+    const pick = await vscode.window.showInformationMessage(
+      `第 ${level.day} 关的多种解法已经生成过了，已为你打开。`,
+      '重新生成'
+    );
+    if (pick === '重新生成') {
+      await multipleSolutions(level, context, true);
+    }
+    return;
+  }
+
+  if (!aiReady(cfg)) {
+    await promptAiSetup('列出多种解法需要配置 API Key。要不要现在配置？');
+    return;
+  }
+
+  await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: `AI 正在整理第 ${level.day} 关的多种解法…（推理模型可能要几十秒）`,
+      cancellable: false,
+    },
+    async () => {
+      try {
+        const md = await generateAlternativeSolutions(level, aiTaskOptions(cfg));
+        const header = [
+          `> 本文件由 AI 生成于 ${new Date().toLocaleString()}，解法仅供参考，不保证覆盖全部写法。`,
+          '> 建议先自己写完一种，再来看其他思路。',
+          '',
+          `**关卡**：第 ${level.day} 关 · ${level.title}　　**模型**：${cfg.model}`,
+          '',
+          '---',
+          '',
+        ].join('\n');
+        await fs.mkdir(path.dirname(file), { recursive: true });
+        await fs.writeFile(file, `${header}${md}\n`, 'utf8');
+        await openAnswerPreview(file);
+        aiLog.appendLine(`[多种解法] 第 ${level.day} 关已生成：${file}`);
+        void vscode.window.showInformationMessage(`第 ${level.day} 关的多种解法已生成。`);
+      } catch (err) {
+        await reportAiTaskError('生成多种解法', err);
+      }
+    }
+  );
+}
+
+interface DiagnoseOptions {
+  /** 已经跑过的运行结果。传了就复用，不再本地重跑一遍 */
+  run?: RunResult | null;
+  /** 自动触发时为 true：不弹成功提示，避免打扰 */
+  quiet?: boolean;
+}
+
+/**
+ * AI 分析报错原因。
+ *
+ * 会**先本地真跑一次**拿到真实 traceback —— 报错分析的价值就在这条 traceback 上，
+ * 让模型凭空猜"可能哪里错了"没有意义。
+ * 代码能跑通时不做分析（没报错可分析），会直接告诉用户。
+ */
+async function diagnoseError(
+  level: Level,
+  context: vscode.ExtensionContext,
+  options: DiagnoseOptions = {}
+): Promise<void> {
+  const cfg = readConfig();
+  const uri = levelFileUri(context, level);
+  const quiet = options.quiet === true;
+
+  const openDoc = vscode.workspace.textDocuments.find((d) => d.uri.fsPath === uri.fsPath);
+  if (openDoc?.isDirty) {
+    await openDoc.save();
+  }
+
+  const code = await readLevelCode(context, level);
+  if (!code.trim()) {
+    if (!quiet) {
+      void vscode.window.showWarningMessage('这一关还没有代码文件，先写点东西再分析。');
+    }
+    return;
+  }
+
+  if (!aiReady(cfg)) {
+    if (!quiet) {
+      await promptAiSetup('分析报错需要配置 API Key。要不要现在配置？');
+    }
+    return;
+  }
+
+  await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: `正在分析第 ${level.day} 关的报错…`,
+      cancellable: false,
+    },
+    async (progress) => {
+      let run: RunResult | null = options.run ?? null;
+      if (!run) {
+        progress.report({ message: '本地运行，抓取真实报错…' });
+        run = await runFile(uri.fsPath, {
+          pythonPath: cfg.pythonPath,
+          timeoutSec: cfg.runTimeoutSec,
+        });
+        lastRun = run;
+      }
+
+      if (run.noInterpreter) {
+        if (!quiet) {
+          await promptAiSetup(
+            `找不到 Python 解释器（${cfg.pythonPath}），拿不到真实报错。请在设置 pythonCamp.pythonPath 里填完整路径。`
+          );
+        }
+        return;
+      }
+
+      if (run.ok) {
+        lastDiagnosis = null;
+        showLevelPanel(level, context);
+        if (!quiet) {
+          void vscode.window.showInformationMessage(
+            `第 ${level.day} 关代码运行正常，没有报错可分析。想看不同写法可以用「多种解法」。`
+          );
+        }
+        return;
+      }
+
+      progress.report({ message: 'AI 正在定位原因…' });
+      try {
+        const md = await generateErrorDiagnosis(level, code, run, aiTaskOptions(cfg));
+        lastDiagnosis = { levelId: level.id, markdown: md };
+        showLevelPanel(level, context);
+        aiLog.appendLine(`[报错分析] 第 ${level.day} 关：${run.errorKind ?? '未识别类型'}`);
+        void vscode.window.showInformationMessage(
+          quiet
+            ? `第 ${level.day} 关运行报错，AI 分析已生成（见「关卡详情」页）。`
+            : `第 ${level.day} 关报错分析已生成，见右侧「关卡详情」页。`
         );
-        if (pick === '测试连接') {
-          await testConnection();
-        } else if (pick === '查看日志') {
-          aiLog.show(true);
+      } catch (err) {
+        if (!quiet) {
+          await reportAiTaskError('分析报错', err);
+        } else {
+          aiLog.appendLine(`[报错分析失败] ${aiErrorAdvice(err)}`);
         }
       }
     }
   );
+}
+
+// ------------------------------------------------------------------ 问答
+
+function chatContextLabel(level: Level | undefined): string {
+  return level ? `第 ${level.day} 关 · ${level.title}` : '（未识别当前关卡）';
+}
+
+/** 追加一条消息到面板（同时更新扩展侧的历史） */
+function pushChat(role: 'user' | 'assistant' | 'error', content: string): void {
+  chatDisplay.push({
+    role,
+    text: content,
+    html: renderMarkdown(content),
+    at: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+  });
+  chatPanel?.setMessages(chatDisplay);
+}
+
+async function openChatPanel(context: vscode.ExtensionContext, level?: Level): Promise<void> {
+  const lv = level ?? resolveAnyLevel();
+  if (!chatPanel) {
+    chatPanel = ChatPanel.show(context.extensionUri, {
+      onAsk: (text) => askQuestion(text, context),
+      onClear: () => {
+        chatHistory = [];
+        chatDisplay = [];
+        chatPanel?.setMessages([]);
+        void vscode.window.showInformationMessage('对话已清空。');
+      },
+      onExport: () => exportChat(context),
+    });
+  }
+  chatPanel.setContext(chatContextLabel(lv));
+  chatPanel.setMessages(chatDisplay);
+  chatPanel.reveal();
+}
+
+async function askQuestion(text: string, context: vscode.ExtensionContext): Promise<void> {
+  const cfg = readConfig();
+  const question = text.trim();
+  if (!question) {
+    return;
+  }
+
+  pushChat('user', question);
+
+  if (!aiReady(cfg)) {
+    pushChat('error', '还没配置 API Key。先执行「配置 API Key 与模型」，我才能回答。');
+    return;
+  }
+
+  const level = resolveAnyLevel();
+  const code = level ? await readLevelCode(context, level) : '';
+
+  chatPanel?.setBusy(true, 'AI 正在思考…');
+  try {
+    const answer = await askAssistant(level, code, chatHistory, question, aiTaskOptions(cfg));
+    chatHistory.push({ role: 'user', content: question });
+    chatHistory.push({ role: 'assistant', content: answer });
+    // 历史别无限增长：只留最近 10 轮，控制 token 开销
+    if (chatHistory.length > 20) {
+      chatHistory = chatHistory.slice(-20);
+    }
+    pushChat('assistant', answer);
+  } catch (err) {
+    const advice = aiErrorAdvice(err);
+    aiLog.appendLine(`[问答失败] ${advice}`);
+    pushChat('error', `这次没答上来：${advice}`);
+  } finally {
+    chatPanel?.setBusy(false);
+  }
+}
+
+async function exportChat(context: vscode.ExtensionContext): Promise<void> {
+  if (!chatDisplay.length) {
+    void vscode.window.showInformationMessage('还没有对话可以导出。');
+    return;
+  }
+  const who = (r: string): string => (r === 'user' ? '我' : r === 'error' ? '（出错）' : 'AI 助教');
+  const body = [
+    `# AI 助教对话记录`,
+    '',
+    `导出时间：${new Date().toLocaleString()}　　**模型**：${readConfig().model}`,
+    '',
+    '---',
+    '',
+    ...chatDisplay.map((m) => `## ${who(m.role)} · ${m.at}\n\n${m.text}\n`),
+  ].join('\n');
+
+  const file = path.join(stateDir(context), 'ai-chat.md');
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, body, 'utf8');
+  const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(file));
+  await vscode.window.showTextDocument(doc, { preview: false });
+  void vscode.window.showInformationMessage('对话已导出到 .pythoncamp/ai-chat.md');
 }
 
 // ------------------------------------------------------------------ 辅助
@@ -986,6 +1327,25 @@ async function handleWebviewMessage(
       }
       break;
     }
+    case 'solutionsLevel': {
+      const lv = curriculum.get(msg.levelId);
+      if (lv) {
+        currentLevelId = lv.id;
+        await multipleSolutions(lv, context);
+      }
+      break;
+    }
+    case 'askLevel': {
+      const lv = curriculum.get(msg.levelId);
+      if (lv) {
+        currentLevelId = lv.id;
+      }
+      await openChatPanel(context, lv);
+      break;
+    }
+    case 'ask':
+      await openChatPanel(context);
+      break;
     case 'resetToday':
       await vscode.commands.executeCommand('pythonCamp.resetToday');
       break;

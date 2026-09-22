@@ -129,6 +129,8 @@ function renderToday() {
           '<button class="tiny" data-act="runLevel" data-id="' + c.id + '">运行</button>' +
           '<button class="tiny" data-act="submitLevel" data-id="' + c.id + '">提交批改</button>' +
           '<button class="tiny" data-act="answerLevel" data-id="' + c.id + '">看参考答案</button>' +
+          '<button class="tiny" data-act="solutionsLevel" data-id="' + c.id + '">多种解法</button>' +
+          '<button class="tiny" data-act="askLevel" data-id="' + c.id + '">问 AI</button>' +
         '</div></div>';
     });
     html += '</div>';
@@ -171,7 +173,8 @@ function renderMap() {
     });
     html += '</div></details>';
   });
-  html += '<div class="footer"><button data-act="pickLevel">快速切换关卡</button>' +
+  html += '<div class="footer"><button data-act="ask">问 AI 助教</button>' +
+    '<button data-act="pickLevel">快速切换关卡</button>' +
     '<button data-act="exportReport">导出学习报告</button></div>';
   return html;
 }
@@ -239,6 +242,9 @@ document.addEventListener('click', function (e) {
   if (act === 'submitLevel') { send({ type: 'submitLevel', levelId: id }); return; }
   if (act === 'runLevel') { send({ type: 'runLevel', levelId: id }); return; }
   if (act === 'answerLevel') { send({ type: 'answerLevel', levelId: id }); return; }
+  if (act === 'solutionsLevel') { send({ type: 'solutionsLevel', levelId: id }); return; }
+  if (act === 'askLevel') { send({ type: 'askLevel', levelId: id }); return; }
+  if (act === 'ask') { send({ type: 'ask' }); return; }
   send({ type: act });
 });
 

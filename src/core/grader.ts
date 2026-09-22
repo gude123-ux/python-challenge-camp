@@ -12,7 +12,7 @@
 import * as vscode from 'vscode';
 import type { GradeResult, Level, RunResult } from './types';
 import { chat, AiError } from '../ai/client';
-import { buildMessages, buildAnswerMessages } from '../ai/prompt';
+import { buildMessages } from '../ai/prompt';
 
 /** 调用模型的通用参数（批改与求解答共用） */
 export interface AiCallOptions {
@@ -585,7 +585,9 @@ export async function gradeCode(
   }
 }
 
-/** 让用户看到 AI 配置问题的统一入口 */
+/**
+ * 让用户看到 AI 配置问题的统一入口
+ */
 export async function promptAiSetup(message: string): Promise<void> {
   const pick = await vscode.window.showWarningMessage(
     message,
@@ -595,28 +597,4 @@ export async function promptAiSetup(message: string): Promise<void> {
   if (pick === '打开设置') {
     await vscode.commands.executeCommand('pythonCamp.openSettings');
   }
-}
-
-/**
- * 让 AI 生成某一关的参考答案与讲解（Markdown 文本）。
- *
- * 和批改不同：这里不解析 JSON —— 产出是直接给学生看的文档。
- * 所以即使模型自由发挥格式也不会"失败"，容错空间大得多。
- */
-export async function generateLevelAnswer(
-  level: Level,
-  opts: AiCallOptions
-): Promise<string> {
-  const messages = buildAnswerMessages(level);
-  const reply = await chat({
-    baseUrl: opts.apiBaseUrl,
-    apiKey: opts.apiKey,
-    model: opts.model,
-    messages,
-    temperature: 0.3,
-    // 参考答案要写 3 道题的思路 + 代码 + 易错点，篇幅比批改大得多
-    maxTokens: opts.maxTokens ?? 8000,
-    timeoutMs: (opts.timeoutSec ?? 240) * 1000,
-  });
-  return reply.content.trim();
 }

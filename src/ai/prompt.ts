@@ -238,3 +238,204 @@ export function buildAnswerMessages(
     { role: 'user', content: user },
   ];
 }
+
+// ------------------------------------------------------------------ 报错分析
+
+/**
+ * 「报错分析」的提示词。
+ *
+ * 和批改的区别：批改是「打分 + 提建议」，这里是「把一个具体错误讲透」。
+ * 所以刻意要求：指出具体行号、给最小改动、教排查方法，
+ * 并且**明确禁止重写整份代码** —— 学生需要理解，不是抄。
+ */
+const ERROR_SYSTEM = `你是一位 Python 助教。学生刚写完的代码运行失败了，正在向你求助。
+
+请帮他**理解**这个错误，而不是替他重写代码。
+
+输出要求（严格遵守）：
+- 全中文，Markdown，按下面的固定结构输出，不要增删大标题。
+- 第二节必须给出**具体行号和那一行的代码**，不要泛泛而谈。
+- 第四节给出**最小改动方案**（只改必要的地方），放在 \`\`\`python 代码块里。
+- 第五节最重要：教他"下次自己怎么找到这类错误"，要给出可操作的排查动作。
+- **不要把整份代码重写一遍**，也不要顺手点评代码风格 —— 只讲这一个错误。
+- 语气直接、具体，不空泛安慰。`;
+
+function errorContext(level: Level, code: string, run: RunResult | null): string {
+  const lines = [
+    `【关卡】第 ${level.day} 关 · ${level.title}`,
+    `【今日目标】${level.goal || '（见知识点）'}`,
+    '',
+    '【本关知识点】',
+    ...level.knowledge.map((k, i) => `${i + 1}. ${k}`),
+    '',
+    '【学生的完整代码】',
+    '```python',
+    code,
+    '```',
+    '',
+    '【本地运行结果】',
+    `- 退出码：${run?.exitCode ?? '未启动'}`,
+    `- 是否超时：${run?.timedOut ? '是' : '否'}`,
+    `- 识别到的错误类型：${run?.errorKind ?? '（未识别出类型）'}`,
+    '',
+    'stdout：',
+    '```',
+    (run?.stdout ?? '').trim() || '（无输出）',
+    '```',
+    'stderr（真实 traceback）：',
+    '```',
+    (run?.stderr ?? '').trim() || '（无错误输出）',
+    '```',
+  ];
+  return lines.join('\n');
+}
+
+const ERROR_TEMPLATE = `请按下面这个结构输出：
+
+# 报错分析：<错误类型>
+
+## 一、这个报错在说什么
+（把错误类型和错误信息翻译成大白话，一两句说清）
+
+## 二、错在哪一行
+（给出具体行号 + 那一行代码，用 \`\`\`python 代码块引用）
+
+## 三、为什么会这样
+（讲清机制：Python 执行到这一步时做了什么、为什么失败。不要只给结论）
+
+## 四、怎么改（最小改动）
+\`\`\`python
+# 只列出需要改动的那几行
+\`\`\`
+（说明为什么这样改就好了）
+
+## 五、下次怎么自己找到这类错误
+（给出可操作的排查动作，例如"先看 traceback 最后一行""在报错行的上一行 print 出那个变量看看它到底是什么"）
+
+## 六、改完怎么确认
+（给出具体的自测方法）`;
+
+export function buildErrorMessages(ctx: {
+  level: Level;
+  code: string;
+  run: RunResult | null;
+}): Array<{ role: 'system' | 'user'; content: string }> {
+  const user = [errorContext(ctx.level, ctx.code, ctx.run), '', ERROR_TEMPLATE].join('\n');
+  return [
+    { role: 'system', content: ERROR_SYSTEM },
+    { role: 'user', content: user },
+  ];
+}
+
+// ------------------------------------------------------------------ 多种解法
+
+/**
+ * 「一题多解」的提示词。
+ *
+ * 目标是让学生看到「同一个问题可以怎么写」，所以要求解法**思路真的不同**
+ * （不是换个变量名），并且每种都要说清优缺点与适用场景，
+ * 最后给一句可操作的决策建议（拒绝"各有优劣、视情况而定"这种废话）。
+ */
+const SOLUTIONS_SYSTEM = `你是一位 Python 助教，正在为同一道练习题整理**多种解法**，帮学生建立"一题多解"的视野。
+
+输出要求（严格遵守）：
+- 全中文，Markdown，按下面的固定结构输出，不要增删大标题。
+- **至少 3 种解法**，思路必须真的不同（不是换个变量名或换个循环写法）。
+- 每种解法都要有：思路、可运行的代码、优点、缺点、什么时候用它。
+- **只使用本关及之前教过的语法**。若某种解法用到后面的知识，必须标注
+  「（这是后面的内容，先了解即可）」。
+- 解法按「从直观到精炼」或「从易到难」排序。
+- 最后一节要给出**可操作的决策建议**，不要写"各有优劣、视情况而定"这类废话。
+- 不要寒暄，直接开始。`;
+
+const SOLUTIONS_TEMPLATE = `请按下面这个结构输出：
+
+# 第 N 关 多种解法
+
+## 一、题目回顾
+（一两句说清要解决什么问题）
+
+## 二、解法总览
+| # | 思路一句话 | 用到的语法 | 难度 | 适合什么时候用 |
+| --- | --- | --- | --- | --- |
+| 1 | … | … | ★ | … |
+| 2 | … | … | ★★ | … |
+| 3 | … | … | ★★★ | … |
+
+## 三、解法一：<名字>
+**思路**：……
+**代码**：
+\`\`\`python
+…
+\`\`\`
+**优点**：……
+**缺点**：……
+**什么时候用它**：……
+
+（解法二、解法三按同样格式写，至少写到三种）
+
+## 四、怎么选
+（给一句可操作的决策建议：初学者 / 追求可读性 / 追求效率 分别选哪个）
+
+## 五、看起来聪明、其实是坏习惯的写法
+- ……`;
+
+export function buildAlternativeSolutionsMessages(
+  level: Level
+): Array<{ role: 'system' | 'user'; content: string }> {
+  const user = [answerLevelSection(level), '', SOLUTIONS_TEMPLATE].join('\n');
+  return [
+    { role: 'system', content: SOLUTIONS_SYSTEM },
+    { role: 'user', content: user },
+  ];
+}
+
+// ------------------------------------------------------------------ 问答
+
+/**
+ * 「随时提问」的提示词。
+ *
+ * 上下文（当前关卡 + 学生代码）拼进 system，对话历史保持干净，
+ * 这样多轮问答里模型始终知道「他现在在做哪一关、手上是什么代码」。
+ */
+const ASK_SYSTEM = `你是一位 Python 助教，正在回答学生的提问。
+
+回答要求：
+- 全中文，Markdown，**简洁**。学生问什么就答什么，不要展开成一篇教程。
+- 优先结合他当前这一关的知识点和他写的代码来回答 —— 下面有。
+- 代码示例要能直接跑通，放在 \`\`\`python 代码块里。
+- 如果问题超出当前关卡范围，先简单回答，再提醒「这是后面会学的，现在知道有这么回事就行」。
+- 如果他的问题本身有误解，先纠正误解再回答。
+- 不确定的就说「我不确定」，不要编。
+- 不要复述他的问题，直接给答案。`;
+
+function askContext(level: Level, code: string): string {
+  const lines = [
+    `【学生当前所在关卡】第 ${level.day} 关 · ${level.title}`,
+    `【今日目标】${level.goal || '（见知识点）'}`,
+    `【本关知识点】${level.knowledge.join('；')}`,
+  ];
+  const trimmed = (code ?? '').trim();
+  if (trimmed) {
+    lines.push('', '【他目前写的代码】', '```python', trimmed.slice(0, 4000), '```');
+  } else {
+    lines.push('', '【他目前写的代码】（还没开始写）');
+  }
+  return lines.join('\n');
+}
+
+export function buildAskMessages(ctx: {
+  level: Level | undefined;
+  code: string;
+  history: Array<{ role: 'user' | 'assistant'; content: string }>;
+  question: string;
+}): Array<{ role: 'system' | 'user' | 'assistant'; content: string }> {
+  const system = ctx.level
+    ? `${ASK_SYSTEM}\n\n${askContext(ctx.level, ctx.code)}`
+    : ASK_SYSTEM;
+  return [
+    { role: 'system', content: system },
+    ...ctx.history,
+    { role: 'user', content: ctx.question },
+  ];
+}

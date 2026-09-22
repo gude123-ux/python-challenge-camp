@@ -179,6 +179,9 @@ export type WebviewMessage =
   | { type: 'submitLevel'; levelId: string }
   | { type: 'runLevel'; levelId: string }
   | { type: 'answerLevel'; levelId: string }
+  | { type: 'solutionsLevel'; levelId: string }
+  | { type: 'askLevel'; levelId: string }
+  | { type: 'ask' }
   | { type: 'resetToday' }
   | { type: 'retryWrong' }
   | { type: 'pickLevel' }

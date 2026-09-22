@@ -87,6 +87,12 @@ export function answerFilePath(context: vscode.ExtensionContext, level: Level): 
   return path.join(answerDir(context), name);
 }
 
+/** 某一关的「多种解法」文件路径（Markdown，与参考答案同目录） */
+export function solutionsFilePath(context: vscode.ExtensionContext, level: Level): string {
+  const name = `第${String(level.day).padStart(2, '0')}关_多种解法.md`;
+  return path.join(answerDir(context), name);
+}
+
 export function todayKey(d: Date = new Date()): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');

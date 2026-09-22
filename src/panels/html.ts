@@ -154,6 +154,18 @@ pre.code {
 }
 .taglist { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
 .taglist .t { font-size: 10.5px; padding: 1px 6px; border-radius: 4px; background: rgba(127,127,127,.18); }
+
+/* 行内代码：只作用于 <code>，pre.code 里的代码块另有样式 */
+code {
+  background: var(--vscode-textCodeBlock-background, rgba(127,127,127,.14));
+  padding: 1px 4px; border-radius: 3px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11.5px;
+}
+.md p { margin: 6px 0; }
+.md h3, .md h4, .md h5 { margin: 12px 0 6px; }
+.md ul, .md ol { margin: 6px 0; padding-left: 20px; }
+.md li { margin-bottom: 3px; }
 `;
 
 export function webviewHtml(opts: {
@@ -188,4 +200,111 @@ export function makeNonce(): string {
     out += chars[Math.floor(Math.random() * chars.length)];
   }
   return out;
+}
+
+/**
+ * 极简 Markdown → HTML。
+ *
+ * 为什么自己写而不装 markdown-it：本插件坚持**运行时零第三方依赖**。
+ * 这里只需要覆盖 AI 回答里真正会出现的结构 —— 代码块、标题、列表、
+ * 粗体、行内代码、分隔线 —— 不追求完整实现 Markdown 规范。
+ *
+ * 所有文本都先过 escapeHtml，因此模型输出里的 <script> 之类不会被执行。
+ */
+export function renderMarkdown(md: string): string {
+  const lines = String(md ?? '').replace(/\r\n/g, '\n').split('\n');
+  const out: string[] = [];
+  let listType: 'ul' | 'ol' | null = null;
+  let i = 0;
+
+  const closeList = (): void => {
+    if (listType) {
+      out.push(`</${listType}>`);
+      listType = null;
+    }
+  };
+
+  const inline = (s: string): string =>
+    escapeHtml(s)
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // 围栏代码块
+    const fence = /^\s*```(\w*)\s*$/.exec(line);
+    if (fence) {
+      closeList();
+      const lang = fence[1];
+      const buf: string[] = [];
+      i += 1;
+      while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) {
+        buf.push(lines[i]);
+        i += 1;
+      }
+      i += 1; // 跳过结束围栏
+      out.push(
+        `<pre class="code" data-lang="${escapeHtml(lang)}">${escapeHtml(buf.join('\n'))}</pre>`
+      );
+      continue;
+    }
+
+    // 标题（整体降两级：# → h3，避免和面板标题打架）
+    const h = /^(#{1,6})\s+(.*)$/.exec(line);
+    if (h) {
+      closeList();
+      const lv = Math.min(h[1].length + 2, 6);
+      out.push(`<h${lv}>${inline(h[2])}</h${lv}>`);
+      i += 1;
+      continue;
+    }
+
+    // 分隔线
+    if (/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+      closeList();
+      out.push('<hr class="sep" />');
+      i += 1;
+      continue;
+    }
+
+    // 无序列表
+    const ul = /^\s*[-*+]\s+(.*)$/.exec(line);
+    if (ul) {
+      if (listType !== 'ul') {
+        closeList();
+        out.push('<ul>');
+        listType = 'ul';
+      }
+      out.push(`<li>${inline(ul[1])}</li>`);
+      i += 1;
+      continue;
+    }
+
+    // 有序列表
+    const ol = /^\s*\d+[.)]\s+(.*)$/.exec(line);
+    if (ol) {
+      if (listType !== 'ol') {
+        closeList();
+        out.push('<ol>');
+        listType = 'ol';
+      }
+      out.push(`<li>${inline(ol[1])}</li>`);
+      i += 1;
+      continue;
+    }
+
+    if (!line.trim()) {
+      closeList();
+      i += 1;
+      continue;
+    }
+
+    closeList();
+    out.push(`<p>${inline(line)}</p>`);
+    i += 1;
+  }
+
+  closeList();
+  return out.join('\n');
 }

@@ -161,6 +161,29 @@ export async function runFile(filePath: string, opts: RunOptions): Promise<RunRe
   return execPython(filePath, { ...opts, cwd });
 }
 
+/**
+ * 删除临时文件，失败就重试几次。
+ *
+ * 为什么不能写成 `fs.unlink(file).catch(() => undefined)`：
+ * 那是**不等待 + 静默吞错**。Windows 上子进程刚退出时文件句柄可能还没释放，
+ * unlink 会以 EBUSY/EPERM 失败并被吞掉，于是临时文件偶发地留在工作区里
+ * （实测复现过：跑完测试残留一个 snippet_xxx.py，测试时好时坏）。
+ */
+async function unlinkQuietly(file: string, attempts = 6): Promise<void> {
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      await fs.unlink(file);
+      return;
+    } catch (err: any) {
+      if (err?.code === 'ENOENT') {
+        return; // 已经没了，正常
+      }
+      // 句柄还没释放，退避一下再试
+      await new Promise((r) => setTimeout(r, 20 * (i + 1)));
+    }
+  }
+}
+
 /** 运行一段代码片段（写入临时目录后执行，用于无法定位文件时的兜底） */
 export async function runSnippet(
   code: string,
@@ -174,8 +197,8 @@ export async function runSnippet(
   try {
     return await execPython(file, { ...opts, cwd: opts.cwd ?? dir });
   } finally {
-    // 临时文件不留在工作区里
-    fs.unlink(file).catch(() => undefined);
+    // 临时文件不留在工作区里（必须 await，否则调用方可能看到残留）
+    await unlinkQuietly(file);
   }
 }
 
@@ -200,13 +223,16 @@ export async function checkSyntax(
     child.stderr?.on('data', (d: Buffer) => {
       err += d.toString('utf8');
     });
+    // 两个回调都先清干净再 resolve —— 保证调用方拿到结果时临时文件已经没了
     child.on('error', () => {
-      fs.unlink(file).catch(() => undefined);
-      resolve({ ok: false, message: '无法调用 Python 解释器' });
+      void unlinkQuietly(file).then(() => {
+        resolve({ ok: false, message: '无法调用 Python 解释器' });
+      });
     });
     child.on('close', (code) => {
-      fs.unlink(file).catch(() => undefined);
-      resolve({ ok: code === 0, message: code === 0 ? '语法正确' : clip(err) });
+      void unlinkQuietly(file).then(() => {
+        resolve({ ok: code === 0, message: code === 0 ? '语法正确' : clip(err) });
+      });
     });
   });
 }

@@ -2,7 +2,7 @@
   "name": "python-challenge-camp",
   "displayName": "Python闯关训练营",
   "description": "通用 Python 学习闯关系统框架：每日任务派发、关卡解锁、AI 自动批改、进度追踪，全部数据保存在本地工作区。题库可替换为任意课程内容。",
-  "version": "1.0.3",
+  "version": "1.1.0",
   "publisher": "gude123-ux",
   "license": "MIT",
   "engines": {
@@ -119,6 +119,24 @@
         "title": "AI 讲解本关（含参考答案）",
         "category": "Python闯关训练营",
         "icon": "$(lightbulb)"
+      },
+      {
+        "command": "pythonCamp.multipleSolutions",
+        "title": "AI 列出多种解法",
+        "category": "Python闯关训练营",
+        "icon": "$(list-tree)"
+      },
+      {
+        "command": "pythonCamp.diagnoseError",
+        "title": "AI 分析报错原因",
+        "category": "Python闯关训练营",
+        "icon": "$(bug)"
+      },
+      {
+        "command": "pythonCamp.askQuestion",
+        "title": "问 AI 助教（随时提问）",
+        "category": "Python闯关训练营",
+        "icon": "$(comment-discussion)"
       },
       {
         "command": "pythonCamp.resetAll",
@@ -275,6 +293,12 @@
           "default": true,
           "description": "模型返回的 JSON 结构损坏时自动重试一次。第三方中转偶发把两次生成拼接在一起，重试通常能拿到干净结果（代价是多等一次）。",
           "order": 15
+        },
+        "pythonCamp.autoDiagnoseOnError": {
+          "type": "boolean",
+          "default": true,
+          "description": "本地运行失败后自动让 AI 分析报错原因，结果显示在关卡详情页。关闭后只能手动点「AI 分析报错」。",
+          "order": 16
         }
       }
     }

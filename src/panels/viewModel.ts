@@ -10,6 +10,7 @@ import { Curriculum } from '../core/curriculum';
 import { ProgressStore } from '../core/store';
 import { Scheduler } from '../core/scheduler';
 import { CampConfig, aiReady } from '../core/config';
+import { renderMarkdown } from './html';
 import { todayKey } from '../util/paths';
 
 export interface LevelChip {
@@ -82,6 +83,10 @@ export interface LevelDetailModel {
   grade: GradeResult | null;
   run: RunResult | null;
   lastComment: string;
+  /** AI 报错分析结果（**已渲染并转义好的 HTML**，直接注入 webview） */
+  diagnosisHtml?: string;
+  /** 最近一次运行是否失败 —— 决定要不要显示「分析报错」按钮 */
+  runFailed: boolean;
 }
 
 export class ViewModelBuilder {
@@ -175,7 +180,8 @@ export class ViewModelBuilder {
     cfg: CampConfig,
     fileExists: boolean,
     grade: GradeResult | null = null,
-    run: RunResult | null = null
+    run: RunResult | null = null,
+    diagnosis: string | null = null
   ): LevelDetailModel {
     const p = this.store.progress;
     const lp = p.levels[level.id];
@@ -201,6 +207,8 @@ export class ViewModelBuilder {
       grade,
       run,
       lastComment: lp?.history?.length ? lp.history[lp.history.length - 1].summary : '',
+      diagnosisHtml: diagnosis ? renderMarkdown(diagnosis) : undefined,
+      runFailed: !!run && !run.ok,
     };
   }
 }

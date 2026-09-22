@@ -21,7 +21,14 @@ import { Curriculum } from '../src/core/curriculum';
 import { ProgressStore } from '../src/core/store';
 import { Scheduler } from '../src/core/scheduler';
 import { normalizeAiResult, localGrade, extractJson } from '../src/core/grader';
-import { buildMessages } from '../src/ai/prompt';
+import {
+  buildMessages,
+  buildErrorMessages,
+  buildAlternativeSolutionsMessages,
+  buildAskMessages,
+} from '../src/ai/prompt';
+import { renderMarkdown } from '../src/panels/html';
+import { solutionsFilePath } from '../src/util/paths';
 import { runFile, runSnippet, checkSyntax } from '../src/core/runner';
 import { todayKey } from '../src/util/paths';
 import type { GradeResult, Level, RunResult } from '../src/core/types';
@@ -427,6 +434,84 @@ async function main(): Promise<void> {
   ok(store3.progress.levels.L01 === undefined, '损坏文件被重建为空进度');
   const baks = fs.readdirSync(path.dirname(progressFile)).filter((f) => f.includes('corrupt'));
   ok(baks.length === 1, '损坏文件已备份', baks.join(','));
+
+  // ---------------------------------------------------------- 8. 讲解类任务
+  section('8. 讲解类任务（报错分析 / 多种解法 / 问答）');
+
+  const errRun: RunResult = {
+    ok: false,
+    exitCode: 1,
+    stdout: '',
+    stderr: "NameError: name 'x' is not defined",
+    timedOut: false,
+    durationMs: 20,
+    pythonPath: 'python',
+    errorKind: 'NameError',
+  };
+  const errMsgs = buildErrorMessages({ level, code: 'print(x)\n', run: errRun });
+  ok(errMsgs.length === 2 && errMsgs[0].role === 'system', '报错分析：system + user 两条消息');
+  ok(errMsgs[1].content.includes('NameError'), '报错分析：真实 traceback 进了提示词');
+  ok(errMsgs[1].content.includes('print(x)'), '报错分析：学生代码进了提示词');
+  ok(errMsgs[1].content.includes('错在哪一行'), '报错分析：要求指出具体行号');
+  ok(errMsgs[1].content.includes('最小改动'), '报错分析：要求给最小改动方案');
+  ok(errMsgs[0].content.includes('不要把整份代码重写'), '报错分析：禁止重写整份代码');
+
+  const solMsgs = buildAlternativeSolutionsMessages(level);
+  ok(solMsgs[0].content.includes('至少 3 种解法'), '多种解法：要求至少 3 种');
+  ok(solMsgs[1].content.includes('什么时候用它'), '多种解法：要求说明适用场景');
+  ok(solMsgs[1].content.includes('题目回顾'), '多种解法：带题目回顾');
+  ok(solMsgs[0].content.includes('思路必须真的不同'), '多种解法：要求思路真的不同');
+
+  const askMsgs = buildAskMessages({
+    level,
+    code: 'print(1)',
+    history: [
+      { role: 'user', content: '上一问' },
+      { role: 'assistant', content: '上一答' },
+    ],
+    question: '这行为什么报错？',
+  });
+  ok(askMsgs.length === 4, '问答：system + 历史 2 条 + 当前问题', String(askMsgs.length));
+  ok(askMsgs[0].content.includes(`第 ${level.day} 关`), '问答：上下文带上了当前关卡');
+  ok(askMsgs[0].content.includes('print(1)'), '问答：上下文带上了学生代码');
+  ok(askMsgs[3].content === '这行为什么报错？', '问答：当前问题放在最后一条');
+  ok(!askMsgs[0].content.includes('上一答'), '问答：历史不进 system（保持干净）');
+
+  const askNoLevel = buildAskMessages({ level: undefined, code: '', history: [], question: 'x' });
+  ok(askNoLevel.length === 2, '问答：没有关卡时也能构造（不崩）');
+
+  const solPath = solutionsFilePath(fakeContext, level);
+  ok(
+    solPath.includes('参考答案') && solPath.endsWith('多种解法.md'),
+    '多种解法文件路径约定正确',
+    solPath
+  );
+
+  // ---------------------------------------------------------- 9. Markdown 渲染
+  section('9. Markdown 渲染（要注入 webview，必须转义）');
+
+  const md1 = renderMarkdown('# 标题\n\n正文 **粗体** 和 `代码`\n\n- 一\n- 二\n\n1. 甲\n2. 乙');
+  ok(md1.includes('<h3>标题</h3>'), '标题渲染（降两级，避免与面板标题打架）');
+  ok(md1.includes('<b>粗体</b>'), '粗体渲染');
+  ok(md1.includes('<code>代码</code>'), '行内代码渲染');
+  ok(md1.includes('<ul>') && md1.includes('<li>一</li>'), '无序列表渲染');
+  ok(md1.includes('<ol>') && md1.includes('<li>甲</li>'), '有序列表渲染');
+
+  const md2 = renderMarkdown('```python\nprint("hi")\n```');
+  ok(md2.includes('<pre class="code"'), '围栏代码块渲染');
+  ok(md2.includes('print(&quot;hi&quot;)'), '代码块内容被转义');
+
+  // ★ 安全：模型输出里的 HTML 必须被转义，绝不能进 webview 执行
+  const evil = renderMarkdown('<script>alert(1)</script>\n\n<img src=x onerror="alert(2)">');
+  ok(!evil.includes('<script>') && !evil.includes('<img'), '★ 模型输出里的 HTML 标签被转义');
+  ok(evil.includes('&lt;script&gt;'), '★ 转义结果可读（&lt;script&gt;）');
+
+  const evilCode = renderMarkdown('```\n</script><script>alert(3)</script>\n```');
+  ok(!evilCode.includes('<script>'), '★ 代码块里的 </script> 被转义（防止提前闭合 script 标签）');
+
+  // 未闭合的围栏不能让内容凭空消失
+  const unclosed = renderMarkdown('```python\nprint(1)');
+  ok(unclosed.includes('print(1)'), '未闭合的代码围栏也能渲染出内容');
 
   // ---------------------------------------------------------- 收尾
   // 清理临时工作区，别在 TEMP 里堆垃圾

@@ -109,6 +109,7 @@ async function main() {
     'pythonCamp.maxTokens',
     'pythonCamp.aiTimeoutSec',
     'pythonCamp.retryOnBadJson',
+    'pythonCamp.autoDiagnoseOnError',
   ];
   const undeclared = codeKeys.filter((k) => !declaredProps.includes(k));
   ok(undeclared.length === 0, `代码读取的 ${codeKeys.length} 个配置项都已在 package.json 声明`, undeclared.join(','));
