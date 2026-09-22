@@ -2,7 +2,7 @@
   "name": "python-challenge-camp",
   "displayName": "Python闯关训练营",
   "description": "通用 Python 学习闯关系统框架：每日任务派发、关卡解锁、AI 自动批改、进度追踪，全部数据保存在本地工作区。题库可替换为任意课程内容。",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "publisher": "gude123-ux",
   "license": "MIT",
   "engines": {

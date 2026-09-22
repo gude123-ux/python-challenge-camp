@@ -76,13 +76,30 @@ export function extractJson(raw: string): any | null {
     /* 继续 */
   }
 
-  // ② 前后有废话（"好的，这是评分：{...} 希望有帮助"）——按括号配对精确截取
+  // ② 模型忘了转义字符串里的双引号 —— 先把它补回来，多半能救成一份**完整**的 JSON
+  const braceStart = text.indexOf('{');
+  if (braceStart >= 0) {
+    const repaired = repairUnescapedQuotes(text, braceStart);
+    if (repaired !== text) {
+      try {
+        return JSON.parse(repaired.slice(braceStart).trim());
+      } catch {
+        /* 继续 */
+      }
+      const fixed = parseFirstBalanced(repaired.slice(braceStart));
+      if (fixed !== null) {
+        return fixed;
+      }
+    }
+  }
+
+  // ③ 前后有废话（"好的，这是评分：{...} 希望有帮助"）——按括号配对精确截取
   const balanced = parseFirstBalanced(text);
   if (balanced !== null) {
     return balanced;
   }
 
-  // ③ 整体被 ```json 包住：用 first-open / last-close 配对，别被内层代码块骗到
+  // ④ 整体被 ```json 包住：用 first-open / last-close 配对，别被内层代码块骗到
   const open = text.search(/```(?:json|JSON)?\s*\n?/);
   if (open >= 0) {
     const bodyStart = text.indexOf('```', open) + 3;
@@ -226,6 +243,75 @@ function readValue(text: string, i: number): number {
 }
 
 /**
+ * 修复「模型忘了转义字符串内部的双引号」。
+ *
+ * 真实案例：模型想引用一条命令，写成了
+ *   "issues": ["…运行了`python -c "print(2026 - 2000, 10 / 4, 10 // 4)"`来观察…"]
+ * 内层双引号没转义 → 字符串提前结束 → 后面全成了非法 token → 整份 JSON 报废。
+ *
+ * 判别方法：字符串里遇到的 `"`，若它后面（跳过空白）不是 `,` `:` `]` `}`
+ * 也不是文本结尾，那它就不是结束引号，而是内容里的裸引号 —— 补个反斜杠转义掉。
+ *
+ * **对合法 JSON 是恒等变换**：合法 JSON 里内容中的引号都已转义，
+ * 所有未转义的 `"` 后面必然紧跟分隔符，所以一个都不会被误改。
+ */
+function repairUnescapedQuotes(text: string, from: number): string {
+  const parts: string[] = [];
+  let inString = false;
+  let escaped = false;
+  let changed = false;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+
+    // from 之前是模型的前言废话，原样保留，也不参与字符串状态判定
+    if (i < from) {
+      parts.push(ch);
+      continue;
+    }
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+        parts.push(ch);
+        continue;
+      }
+      if (ch === '\\') {
+        escaped = true;
+        parts.push(ch);
+        continue;
+      }
+      if (ch === '"') {
+        let j = i + 1;
+        while (j < text.length && /\s/.test(text[j])) {
+          j += 1;
+        }
+        const next = text[j];
+        const isTerminator =
+          j >= text.length || next === ',' || next === ':' || next === ']' || next === '}';
+        if (isTerminator) {
+          inString = false;
+          parts.push(ch);
+        } else {
+          parts.push('\\"');
+          changed = true;
+        }
+        continue;
+      }
+      parts.push(ch);
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = true;
+    }
+    parts.push(ch);
+  }
+
+  return changed ? parts.join('') : text;
+}
+
+/**
  * 从「结构已损坏」的 JSON 里抢救完整的顶层字段。
  *
  * 真实场景（用户实测遇到）：模型生成到一半突然**重新开始一份新草稿**，
@@ -328,8 +414,8 @@ export function normalizeAiResult(raw: string, level: Level): GradeResult | null
   const issues = toStrArray(obj.issues, 6);
   if (salvaged) {
     issues.unshift(
-      '⚠️ 模型这次的返回结构损坏（上游把两次生成拼接在了一起），已抢救出完整的字段。' +
-        '分数是可用的，但下面的建议列表可能不完整，必要时可重新提交一次。'
+      '⚠️ 模型这次的返回结构损坏，已抢救出完整字段。分数是可用的，但下面的建议列表可能不完整。' +
+        '常见原因：上游中转把两次生成拼接在一起，或模型输出了无法自动修复的内容。必要时可重新提交一次。'
     );
   }
 
@@ -457,15 +543,20 @@ export async function gradeCode(
     let raw = reply.content;
     let parsed = normalizeAiResult(raw, level);
 
-    // 连「逐字段抢救」都救不回来 —— 说明返回整体是坏的。
-    // 第三方中转偶发把两次生成拼在一起，用 temperature=0 重试一次通常能拿到干净的。
-    if (!parsed && opts.retryOnBadJson !== false) {
+    // 解析彻底失败、或只靠「逐字段抢救」拿到残缺结果 → 重试一次。
+    // 上游偶发把两次生成拼在一起，重试通常能拿到一份干净的完整结果。
+    if ((!parsed || parsed.salvaged) && opts.retryOnBadJson !== false) {
       try {
-        reply = await callModel(0);
-        raw = reply.content;
-        parsed = normalizeAiResult(raw, level);
+        const retry = await callModel(0);
+        const retried = normalizeAiResult(retry.content, level);
+        // 只有拿到「更好」的结果才替换：要么完整，要么原本什么都没有
+        if (retried && (!retried.salvaged || !parsed)) {
+          reply = retry;
+          raw = retry.content;
+          parsed = retried;
+        }
       } catch {
-        /* 重试也失败，就按第一次的原文报错 */
+        /* 重试失败就沿用第一次的结果 */
       }
     }
 

@@ -21,6 +21,7 @@ import { Curriculum } from '../src/core/curriculum';
 import { ProgressStore } from '../src/core/store';
 import { Scheduler } from '../src/core/scheduler';
 import { normalizeAiResult, localGrade, extractJson } from '../src/core/grader';
+import { buildMessages } from '../src/ai/prompt';
 import { runFile, runSnippet, checkSyntax } from '../src/core/runner';
 import { todayKey } from '../src/util/paths';
 import type { GradeResult, Level, RunResult } from '../src/core/types';
@@ -259,6 +260,76 @@ async function main(): Promise<void> {
   ok(normalizeAiResult('随便一段话', level) === null, '毫无结构的文本不会被抢救成结果');
   ok(extractJson('{"score":') === null, '只有一个残破 key 时不抢救');
   ok(normalizeAiResult('{"score": 50, "runnable": true}', level)?.salvaged === undefined, '正常返回不会被标记为 salvaged');
+
+  // ---- 回归：第三种损坏 —— 模型**忘了转义字符串内部的双引号**。
+  //      它想引用一条命令，写成了 …运行了`python -c "print(...)"`来观察…
+  //      内层引号没转义 → 字符串提前结束 → 整份 JSON 报废 → 整条批改退化成"本地评分"。
+  const unescaped = `{
+  "score": 85,
+  "runnable": true,
+  "correctness": 90,
+  "quality": 75,
+  "summary": "代码能无报错运行，成功完成了第1关的核心目标。",
+  "strengths": ["代码完全可运行，无语法错误", "通过\`# print(...)\`验证了练习2"],
+  "issues": [
+    "练习3未完成：学生未在代码或提交记录中体现运行了\`python -c "print(2026 - 2000, 10 / 4, 10 // 4)"\`来观察 \`/\` 和 \`//\` 的区别",
+    "练习2只是简单注释，没有体现'取消注释后重新运行'的验证动作"
+  ],
+  "suggestions": ["建议在终端执行 \`python -c 'print(2026 - 2000)'\` 并把结果贴进注释"],
+  "weakTags": ["注释", "整除"],
+  "exerciseChecks": [
+    { "index": 1, "done": true, "comment": "完成" },
+    { "index": 3, "done": false, "comment": "未完成" }
+  ]
+}`;
+
+  ok(extractJson(unescaped) !== null, '未转义双引号的返回能被修复（回归）');
+  const ru = normalizeAiResult(unescaped, level);
+  ok(ru?.score === 85, '修复后拿到完整分数 85', String(ru?.score));
+  ok(ru?.issues.length === 2, 'issues 两条都保住（不是只剩一条警告）', String(ru?.issues.length));
+  ok(
+    (ru?.issues[0] ?? '').includes('print(2026 - 2000, 10 / 4, 10 // 4)'),
+    '被引号切断的那条 issue 内容被原样重建'
+  );
+  ok(
+    ru?.suggestions.length === 1 && ru?.exerciseChecks.length === 2,
+    'suggestions / exerciseChecks 完整保留',
+    `${ru?.suggestions.length}/${ru?.exerciseChecks.length}`
+  );
+  ok(ru?.salvaged === undefined, '完整修复后不标记 salvaged（这是正常解析，不该给用户报警）');
+
+  // ---- 引号修复必须是**恒等变换**：合法 JSON 一个字符都不能改。
+  //      这是这次改动最大的风险点，必须逐条钉死。
+  ok(extractJson('{"a":"b","c":["d","e"]}')?.a === 'b', '合法 JSON 不受影响');
+  ok(extractJson('{"a":"say \\"hi\\""}')?.a === 'say "hi"', '已正确转义的引号保持原样');
+  ok(extractJson('{"a":"x:y"}')?.a === 'x:y', '字符串内的冒号不被误判为 key 分隔');
+  ok(extractJson('{"a":"b, c"}')?.a === 'b, c', '字符串内的逗号不被误判为分隔符');
+  ok(extractJson('{"a":"尾部","b":1}')?.b === 1, '字符串紧跟逗号时正确结束');
+  ok(extractJson('{"a":"尾]","b":1}')?.b === 1, '字符串内含右方括号不受影响');
+  ok(extractJson('{"a":{"b":["c"]}}')?.a?.b?.[0] === 'c', '嵌套结构不受影响');
+  ok(extractJson('{"a":"","b":""}')?.b === '', '空字符串不受影响');
+  ok(extractJson('{"a":"结尾"}')?.a === '结尾', '字符串紧跟右花括号时正确结束');
+  ok(
+    extractJson('{"a":"多行\\n换行","b":2}')?.b === 2,
+    '含转义换行的字符串不受影响'
+  );
+
+  // ---- 提示词加固：确认转义规则真的进了 SYSTEM。
+  //      这段是在模板字符串里写的，反引号和反斜杠极易写错 —— 必须实测渲染结果，
+  //      否则"加了规则"只是自我安慰（模型看到的可能是被吃掉转义的残句）。
+  const probeMsgs = buildMessages({
+    level,
+    code: 'print(1)',
+    run: null,
+    strictMode: false,
+    weakPoints: [],
+  });
+  const sys = probeMsgs[0].content;
+  ok(sys.includes('字符串值内部不要出现英文双引号'), '提示词含 JSON 转义硬要求');
+  ok(sys.includes('反引号'), '提示词引导模型改用反引号引用命令');
+  ok(sys.includes('\\n'), '提示词里的换行示例渲染为字面 \\n（不是真换行）');
+  ok(sys.includes('\\"'), '提示词里的转义示例渲染为字面 \\"');
+  ok(!sys.includes('${'), '提示词里没有未展开的模板占位符');
 
   // ---------------------------------------------------------- 5. 本地评分
   section('5. 本地启发式评分');
