@@ -173,6 +173,7 @@ export type WebviewMessage =
   | { type: 'openLevel'; levelId: string }
   | { type: 'submitLevel'; levelId: string }
   | { type: 'runLevel'; levelId: string }
+  | { type: 'answerLevel'; levelId: string }
   | { type: 'resetToday' }
   | { type: 'retryWrong' }
   | { type: 'pickLevel' }

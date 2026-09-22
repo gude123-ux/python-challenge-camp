@@ -128,6 +128,7 @@ function renderToday() {
           '<button class="primary tiny" data-act="openLevel" data-id="' + c.id + '">打开关卡</button>' +
           '<button class="tiny" data-act="runLevel" data-id="' + c.id + '">运行</button>' +
           '<button class="tiny" data-act="submitLevel" data-id="' + c.id + '">提交批改</button>' +
+          '<button class="tiny" data-act="answerLevel" data-id="' + c.id + '">看参考答案</button>' +
         '</div></div>';
     });
     html += '</div>';
@@ -237,6 +238,7 @@ document.addEventListener('click', function (e) {
   if (act === 'openLevel') { send({ type: 'openLevel', levelId: id }); return; }
   if (act === 'submitLevel') { send({ type: 'submitLevel', levelId: id }); return; }
   if (act === 'runLevel') { send({ type: 'runLevel', levelId: id }); return; }
+  if (act === 'answerLevel') { send({ type: 'answerLevel', levelId: id }); return; }
   send({ type: act });
 });
 

@@ -977,6 +977,14 @@ async function handleWebviewMessage(
       }
       break;
     }
+    case 'answerLevel': {
+      const lv = curriculum.get(msg.levelId);
+      if (lv) {
+        currentLevelId = lv.id;
+        await explainLevel(lv, context);
+      }
+      break;
+    }
     case 'resetToday':
       await vscode.commands.executeCommand('pythonCamp.resetToday');
       break;
