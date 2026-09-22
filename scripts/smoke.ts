@@ -234,6 +234,32 @@ async function main(): Promise<void> {
     '围栏内含反引号也能解析'
   );
 
+  // ---- 回归：第二种损坏 —— 模型生成到一半**重新开始一份新草稿**，
+  //      两份 JSON 被上游中转拼接在一起。
+  //      注意 score 75→70、correctness 60→50，是两份不同的生成。
+  //      整体 parse 必须失败（不该硬修），但损坏点之前的字段是完整可用的，
+  //      所以要能「逐字段抢救」，避免整个批改退化成本地评分。
+  const spliced =
+    `{"score":75,"runnable":true,"correctness":60,"quality":80,"summary":"代码成功运行且结构清晰，完成了一部分练习要求。不过练习 1 中将提示文字原样输出，未填入真实的个人信息与日期，请注意替换。","strengths":["代码完全可运行，语法正确，无报错","正确添加了被注释掉的 print 语句以验证注释机制","按格式要求完成了{ "score": 70, "runnable": true, "correctness": 50, "quality": 80, "summary": "代码成功运行且没有报错，并按照要求添加了注释验证。但练习 1 中未能将占位文本替换为具体的个人姓名、实际日期和鼓励话语，显得较为糊弄。", "strengths": [ "代码结构清晰，完全可以无报错运行"`;
+
+  ok(extractJson(spliced) === null, '被拼接的 JSON 整体解析确实失败（该失败就得失败）');
+
+  const rs = normalizeAiResult(spliced, level);
+  ok(!!rs, '拼接损坏的返回能被逐字段抢救出来');
+  ok(rs?.score === 75, '抢救出第一份草稿的分数 75（不是第二份的 70）', String(rs?.score));
+  ok(rs?.runnable === true, '抢救出 runnable');
+  ok(rs?.correctness === 60, '抢救出 correctness 60（不是第二份的 50）', String(rs?.correctness));
+  ok(rs?.quality === 80, '抢救出 quality');
+  ok((rs?.summary ?? '').includes('完成了一部分练习要求'), '抢救出 summary 全文');
+  ok(rs?.salvaged === true, '标记 salvaged，UI 会提示可能不完整');
+  ok((rs?.issues?.[0] ?? '').includes('结构损坏'), 'issues 里带上了损坏提示');
+
+  // 抢救必须保守：救不出来就老实返回 null，绝不能凭空编一个分数
+  ok(extractJson('这不是 JSON，也没有花括号') === null, '没有对象可抢救时返回 null');
+  ok(normalizeAiResult('随便一段话', level) === null, '毫无结构的文本不会被抢救成结果');
+  ok(extractJson('{"score":') === null, '只有一个残破 key 时不抢救');
+  ok(normalizeAiResult('{"score": 50, "runnable": true}', level)?.salvaged === undefined, '正常返回不会被标记为 salvaged');
+
   // ---------------------------------------------------------- 5. 本地评分
   section('5. 本地启发式评分');
   const goodRun: RunResult = {

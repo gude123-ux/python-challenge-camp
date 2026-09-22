@@ -512,6 +512,7 @@ async function submitLevel(
         weakPoints: store.weakRanking(5).map((w) => w.tag),
         maxTokens: cfg.maxTokens,
         timeoutSec: cfg.aiTimeoutSec,
+        retryOnBadJson: cfg.retryOnBadJson,
       });
 
       const result = outcome.result;

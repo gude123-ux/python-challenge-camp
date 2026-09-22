@@ -21,6 +21,8 @@ export interface CampConfig {
   maxTokens: number;
   /** 模型响应超时（秒）。推理模型需要给足时间。 */
   aiTimeoutSec: number;
+  /** 返回的 JSON 结构损坏时是否自动重试一次 */
+  retryOnBadJson: boolean;
 }
 
 export function readConfig(): CampConfig {
@@ -40,6 +42,7 @@ export function readConfig(): CampConfig {
     strictMode: c.get<boolean>('strictMode') ?? false,
     maxTokens: c.get<number>('maxTokens') ?? 4000,
     aiTimeoutSec: c.get<number>('aiTimeoutSec') ?? 120,
+    retryOnBadJson: c.get<boolean>('retryOnBadJson') ?? true,
   };
 }
 

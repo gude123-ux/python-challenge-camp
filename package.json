@@ -2,7 +2,7 @@
   "name": "python-challenge-camp",
   "displayName": "Python闯关训练营",
   "description": "通用 Python 学习闯关系统框架：每日任务派发、关卡解锁、AI 自动批改、进度追踪，全部数据保存在本地工作区。题库可替换为任意课程内容。",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "publisher": "gude123-ux",
   "license": "MIT",
   "engines": {
@@ -269,6 +269,12 @@
           "maximum": 900,
           "description": "模型响应超时（秒）。推理模型（gpt-5.x、deepseek-reasoner 等）思考较慢，建议 180~300。",
           "order": 14
+        },
+        "pythonCamp.retryOnBadJson": {
+          "type": "boolean",
+          "default": true,
+          "description": "模型返回的 JSON 结构损坏时自动重试一次。第三方中转偶发把两次生成拼接在一起，重试通常能拿到干净结果（代价是多等一次）。",
+          "order": 15
         }
       }
     }

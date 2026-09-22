@@ -29,6 +29,8 @@ export interface GradeOptions extends AiCallOptions {
   enableAI: boolean;
   strictMode: boolean;
   weakPoints: string[];
+  /** 解析彻底失败时是否自动重试一次（默认开） */
+  retryOnBadJson?: boolean;
 }
 
 const clamp = (n: unknown, min = 0, max = 100): number => {
@@ -152,12 +154,162 @@ function parseFirstBalanced(text: string): any | null {
   return null;
 }
 
-/** 把模型输出规整成 GradeResult */
-export function normalizeAiResult(raw: string, level: Level): GradeResult | null {
-  const obj = extractJson(raw);
-  if (!obj || typeof obj !== 'object') {
+/** 从 text[i]（应为一个 `"`）读到字符串结束引号的下标；不完整返回 -1 */
+function readString(text: string, i: number): number {
+  if (text[i] !== '"') {
+    return -1;
+  }
+  let escaped = false;
+  for (let j = i + 1; j < text.length; j += 1) {
+    const ch = text[j];
+    if (escaped) {
+      escaped = false;
+    } else if (ch === '\\') {
+      escaped = true;
+    } else if (ch === '"') {
+      return j;
+    } else if (ch === '\n' || ch === '\r') {
+      return -1; // 字符串里出现裸换行 → 已经非法
+    }
+  }
+  return -1;
+}
+
+/** 从 text[i] 读一个完整 JSON 值，返回结束下标；不完整或结构错乱返回 -1 */
+function readValue(text: string, i: number): number {
+  const ch = text[i];
+  if (ch === '"') {
+    return readString(text, i);
+  }
+  if (ch === '{' || ch === '[') {
+    const stack: string[] = [];
+    let inString = false;
+    let escaped = false;
+    for (let j = i; j < text.length; j += 1) {
+      const c = text[j];
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (c === '\\') {
+          escaped = true;
+        } else if (c === '"') {
+          inString = false;
+        }
+        continue;
+      }
+      if (c === '"') {
+        inString = true;
+      } else if (c === '{' || c === '[') {
+        stack.push(c);
+      } else if (c === '}' || c === ']') {
+        const open = stack.pop();
+        if (!open) {
+          return -1;
+        }
+        // 括号类型对不上 = 结构已经错乱，别再往下猜
+        if ((c === '}') !== (open === '{')) {
+          return -1;
+        }
+        if (stack.length === 0) {
+          return j;
+        }
+      }
+    }
+    return -1;
+  }
+  // 数字 / true / false / null
+  let j = i;
+  while (j < text.length && !/[\s,\]}[]/.test(text[j])) {
+    j += 1;
+  }
+  return j > i ? j - 1 : -1;
+}
+
+/**
+ * 从「结构已损坏」的 JSON 里抢救完整的顶层字段。
+ *
+ * 真实场景（用户实测遇到）：模型生成到一半突然**重新开始一份新草稿**，
+ * 两份 JSON 被上游中转拼接在一起：
+ *
+ *   {"score":75,...,"strengths":["a","b","按格式要求完成了{ "score": 70, ...
+ *
+ * 整体 parse 必然失败（这是对的，不该硬修），但**损坏点之前**的字段是完整可用的。
+ * 逐字段解析、遇到第一个不完整的就停 —— 分数、可运行性、总评这些关键字段
+ * 通常都排在前面，所以能救回来，不必整个退化成"本地评分"。
+ */
+function salvageTopLevelFields(text: string): Record<string, unknown> | null {
+  const start = text.indexOf('{');
+  if (start < 0) {
     return null;
   }
+
+  const out: Record<string, unknown> = {};
+  let found = 0;
+  let i = start + 1;
+
+  while (i < text.length) {
+    while (i < text.length && /[\s,]/.test(text[i])) {
+      i += 1;
+    }
+    if (i >= text.length || text[i] === '}' || text[i] !== '"') {
+      break;
+    }
+
+    const keyEnd = readString(text, i);
+    if (keyEnd < 0) {
+      break;
+    }
+    let key: string;
+    try {
+      key = JSON.parse(text.slice(i, keyEnd + 1)) as string;
+    } catch {
+      break;
+    }
+    i = keyEnd + 1;
+
+    while (i < text.length && /\s/.test(text[i])) {
+      i += 1;
+    }
+    if (text[i] !== ':') {
+      break;
+    }
+    i += 1;
+    while (i < text.length && /\s/.test(text[i])) {
+      i += 1;
+    }
+
+    const valEnd = readValue(text, i);
+    if (valEnd < 0) {
+      break; // 这个字段已经不完整了，保留前面拿到的
+    }
+    try {
+      out[key] = JSON.parse(text.slice(i, valEnd + 1));
+      found += 1;
+    } catch {
+      break;
+    }
+    i = valEnd + 1;
+  }
+
+  return found > 0 ? out : null;
+}
+
+/** 把模型输出规整成 GradeResult */
+export function normalizeAiResult(raw: string, level: Level): GradeResult | null {
+  let obj = extractJson(raw);
+  let salvaged = false;
+
+  if (!obj || typeof obj !== 'object') {
+    // 整体解析失败 → 再试一次「逐字段抢救」。
+    // 上游偶发把两次生成拼在一起时，整体结构一定是坏的，
+    // 但分数、可运行性、总评这些靠前的字段仍然完整。
+    obj = salvageTopLevelFields(raw);
+    salvaged = true;
+    if (!obj || typeof obj !== 'object') {
+      return null;
+    }
+  }
+
   const runnable = obj.runnable === true || obj.runnable === 'true';
   let score = clamp(obj.score);
   if (!runnable && score > 45) {
@@ -173,6 +325,14 @@ export function normalizeAiResult(raw: string, level: Level): GradeResult | null
         .slice(0, level.exercises.length || 6)
     : [];
 
+  const issues = toStrArray(obj.issues, 6);
+  if (salvaged) {
+    issues.unshift(
+      '⚠️ 模型这次的返回结构损坏（上游把两次生成拼接在了一起），已抢救出完整的字段。' +
+        '分数是可用的，但下面的建议列表可能不完整，必要时可重新提交一次。'
+    );
+  }
+
   return {
     score,
     runnable,
@@ -180,11 +340,12 @@ export function normalizeAiResult(raw: string, level: Level): GradeResult | null
     quality: clamp(obj.quality),
     summary: String(obj.summary ?? '').trim() || '（模型未给出总评）',
     strengths: toStrArray(obj.strengths, 4),
-    issues: toStrArray(obj.issues, 6),
+    issues,
     suggestions: toStrArray(obj.suggestions, 6),
     weakTags: toStrArray(obj.weakTags, 6),
     exerciseChecks: checks,
     source: 'ai',
+    salvaged: salvaged || undefined,
     raw,
   };
 }
@@ -280,18 +441,34 @@ export async function gradeCode(
     weakPoints: opts.weakPoints,
   });
 
-  try {
-    const reply = await chat({
+  const callModel = (temperature: number) =>
+    chat({
       baseUrl: opts.apiBaseUrl,
       apiKey: opts.apiKey,
       model: opts.model,
       messages,
-      temperature: opts.strictMode ? 0.1 : 0.2,
+      temperature,
       maxTokens: opts.maxTokens ?? 4000,
       timeoutMs: (opts.timeoutSec ?? 120) * 1000,
     });
-    const raw = reply.content;
-    const parsed = normalizeAiResult(raw, level);
+
+  try {
+    let reply = await callModel(opts.strictMode ? 0.1 : 0.2);
+    let raw = reply.content;
+    let parsed = normalizeAiResult(raw, level);
+
+    // 连「逐字段抢救」都救不回来 —— 说明返回整体是坏的。
+    // 第三方中转偶发把两次生成拼在一起，用 temperature=0 重试一次通常能拿到干净的。
+    if (!parsed && opts.retryOnBadJson !== false) {
+      try {
+        reply = await callModel(0);
+        raw = reply.content;
+        parsed = normalizeAiResult(raw, level);
+      } catch {
+        /* 重试也失败，就按第一次的原文报错 */
+      }
+    }
+
     if (!parsed) {
       const fallback = localGrade(level, code, run);
       return {
@@ -301,7 +478,7 @@ export async function gradeCode(
           raw.length +
           '，结束原因 ' +
           (reply.finishReason ?? '未知') +
-          '）。已改用本地检查结果。\n' +
+          '，已自动重试一次）。已改用本地检查结果。\n' +
           '原始返回片段：\n' +
           raw.slice(0, 400),
       };

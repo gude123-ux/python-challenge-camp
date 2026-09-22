@@ -159,6 +159,11 @@ export interface GradeResult {
   /** 逐条练习的完成情况 */
   exerciseChecks: Array<{ index: number; done: boolean; comment: string }>;
   source: 'ai' | 'local';
+  /**
+   * 模型返回的 JSON 结构损坏、靠「逐字段抢救」才拿到结果。
+   * 此时分数可用，但建议列表可能不完整 —— UI 会给出提示。
+   */
+  salvaged?: boolean;
   /** 模型返回的原始文本，便于排查 */
   raw?: string;
   /** 出错时的提示（例如 API Key 无效） */
