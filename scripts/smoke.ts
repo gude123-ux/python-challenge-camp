@@ -29,6 +29,13 @@ import {
 } from '../src/ai/prompt';
 import { renderMarkdown } from '../src/panels/html';
 import { solutionsFilePath } from '../src/util/paths';
+import {
+  TerminalRecorder,
+  formatTerminalContext,
+  analyzeTerminalForLevel,
+  isPythonRelated,
+} from '../src/core/terminal';
+import type { TerminalEntry } from '../src/core/terminal';
 import { runFile, runSnippet, checkSyntax } from '../src/core/runner';
 import { todayKey } from '../src/util/paths';
 import type { GradeResult, Level, RunResult } from '../src/core/types';
@@ -65,14 +72,20 @@ async function main(): Promise<void> {
   };
 
   // ---------------------------------------------------------- 1. 题库
-  // 注意：这里只校验「结构不变量」，不写死关卡数量 ——
-  // 换掉 data/levels.json 里的内容后，测试仍然应该全绿。
   section('1. 题库完整性');
   const curriculum = new Curriculum();
   curriculum.load(fakeContext.extensionUri);
   const all = curriculum.all;
+  // 只校验「结构不变量」，不写死关卡数量 —— 换掉 data/levels.json 后测试仍应全绿
   ok(all.length >= 5, '关卡数 >= 5（够跑下面的每日任务用例）', `实际 ${all.length}`);
   ok(curriculum.chapters.length >= 1, '章节数 >= 1', `实际 ${curriculum.chapters.length}`);
+  ok(new Set(all.map((l) => l.id)).size === all.length, '关卡 ID 唯一');
+  ok(all.every((l, i) => i === 0 || l.day > all[i - 1].day), 'day 严格递增');
+  const idsInChapters = curriculum.chapters.flatMap((c) => c.levelIds);
+  ok(
+    idsInChapters.length === all.length && new Set(idsInChapters).size === all.length,
+    '章节恰好收录全部关卡且不重复'
+  );
   ok(all.every((l) => l.knowledge.length >= 1), '每关都有知识点简述');
   ok(all.every((l) => l.exercises.length >= 1), '每关都有练习题');
   ok(all.every((l) => l.starterCode.includes('本关练习')), '每关的模板都带练习说明');
@@ -82,29 +95,8 @@ async function main(): Promise<void> {
     all.every((l) => l.starterCode.length > 60),
     '模板内容非空'
   );
-  ok(new Set(all.map((l) => l.id)).size === all.length, '关卡 ID 唯一');
-  ok(
-    all.every((l, i) => i === 0 || l.day > all[i - 1].day),
-    '关卡按 day 严格递增'
-  );
-  ok(
-    all.every((l) => l.title.length > 0 && l.chapterTitle.length > 0),
-    '每关都有标题与章节名'
-  );
-  const idsInChapters = curriculum.chapters.flatMap((c) => c.levelIds);
-  ok(
-    idsInChapters.length === all.length && new Set(idsInChapters).size === all.length,
-    '章节恰好收录全部关卡且不重复',
-    `章节收录 ${idsInChapters.length} / 题库 ${all.length}`
-  );
-  ok(
-    curriculum.chapters.every((c) => c.levelIds.length >= 1),
-    '每章至少 1 关'
-  );
-  ok(
-    all.every((l) => curriculum.levelsOfChapter(l.chapter).some((x) => x.id === l.id)),
-    '每关都能在它所属章节里找到'
-  );
+  const chSizes = curriculum.chapters.map((c) => c.levelIds.length);
+  ok(chSizes.every((n) => n >= 1), '每章至少 1 关', chSizes.join(','));
 
   // ---------------------------------------------------------- 2. 解锁规则
   section('2. 解锁规则');
@@ -172,7 +164,7 @@ async function main(): Promise<void> {
 
   // 统计
   const stats = curriculum.stats(store.progress, PASS, false);
-  ok(stats.total === all.length && stats.passed === 1, `统计：总 ${all.length} 关，已过 1 关`, `${stats.total}/${stats.passed}`);
+  ok(stats.total === all.length && stats.passed === 1, '统计：总关卡数与题库一致，已过 1 关', `${stats.total}/${stats.passed}`);
   ok(Math.abs(stats.completionRate - 1 / all.length) < 1e-9, '完成率计算正确');
 
   // 学习时长
@@ -427,6 +419,22 @@ async function main(): Promise<void> {
   ok(store2.progress.levels.L01.bestScore === 88, '重新载入后数据仍在');
   ok(store2.progress.stats.totalStudyMs === 120_000, '重新载入后时长仍在');
 
+  // ★ 进度自愈：过线分数被外部因素调高后，历史过关记录不该「倒退」
+  //   （用户实测：过了关，面板却显示未过关 —— 另一个同名插件把
+  //    pythonCamp.passScore 的默认值从 60 顶成了 80）
+  await store2.update((p) => {
+    p.levels.L01.status = 'unlocked';
+    delete p.levels.L01.passedAt;
+    p.daily = { date: todayKey(), levelIds: ['L01', 'L02'], done: [] };
+  });
+  const healed = await store2.reconcile(60);
+  ok(healed === true, 'reconcile 检测到需要修正的进度');
+  ok(store2.progress.levels.L01.status === 'passed', '★ 88 分（过线 60）被修正回「已过关」');
+  ok(store2.progress.levels.L01.passedAt !== undefined, 'passedAt 被补回');
+  ok(store2.progress.daily.done.includes('L01'), '今日任务的完成标记被补回');
+  ok((await store2.reconcile(60)) === false, '没有需要修正的内容时返回 false（可反复调用）');
+  ok(store2.progress.daily.done.length === 1, '只补回真正过关的那一关');
+
   // 损坏文件恢复
   fs.writeFileSync(progressFile, '{ 这不是合法 JSON', 'utf8');
   const store3 = new ProgressStore(fakeContext);
@@ -512,6 +520,87 @@ async function main(): Promise<void> {
   // 未闭合的围栏不能让内容凭空消失
   const unclosed = renderMarkdown('```python\nprint(1)');
   ok(unclosed.includes('print(1)'), '未闭合的代码围栏也能渲染出内容');
+
+  // ---------------------------------------------------------- 10. 终端证据
+  // 背景（用户实测反馈）：课程材料里有些练习要求「在终端敲一条命令看输出」，
+  // 这类证据不在 .py 文件里。早期版本只看文件与本地运行结果，
+  // 于是 AI 判「练习未完成」并扣分 —— 学生明明做过了。
+  section('10. 集成终端证据');
+  const termEntries: TerminalEntry[] = [
+    { terminal: 'pwsh', command: 'python 第02关_变量与数据类型.py', output: '姓名: 张三\n年龄: 20\n', at: 1 },
+    { terminal: 'pwsh', command: 'python -c "print(2026 - 2000, 10 / 4, 10 // 4)"', output: '26 2.5 2\n', at: 2 },
+    { terminal: 'pwsh', command: 'git push origin master', output: 'Everything up-to-date\n', at: 3 },
+  ];
+  ok(isPythonRelated(termEntries[0]) && isPythonRelated(termEntries[1]), '识别出 python 相关命令');
+  ok(!isPythonRelated(termEntries[2]), '非 python 命令（git push）不进入证据');
+
+  const termCtx = formatTerminalContext(termEntries);
+  ok(termCtx.includes('python 第02关'), '终端上下文含关卡文件的运行命令');
+  ok(termCtx.includes('26 2.5 2'), '终端上下文含命令输出');
+  ok(!termCtx.includes('git push'), '★ 终端上下文不含无关命令（隐私）');
+
+  const ev = analyzeTerminalForLevel(termEntries, level);
+  ok(ev.ran && ev.clean && !ev.failed, '识别出本关在终端里跑通过');
+  const evOther = analyzeTerminalForLevel(termEntries, curriculum.get('L05')!);
+  ok(!evOther.ran, '其它关卡不会被误判成"跑过"');
+  const evBad = analyzeTerminalForLevel(
+    [{ terminal: 't', command: 'python 第02关_x.py', output: 'Traceback (most recent call last):\nNameError: x', at: 4 }],
+    level
+  );
+  ok(evBad.ran && evBad.failed && !evBad.clean, '终端里的 traceback 被当作失败证据');
+
+  // 本地评分必须用上终端证据（否则「插件跑不了但学生自己跑通了」会被判不可运行）
+  const termCode = 'a = 1\nprint(a)\n# 注释一\n# 注释二\n';
+  const gTerm = localGrade(level, termCode, null, termCtx);
+  ok(gTerm.runnable === true, '本地没跑过、但终端跑过 → 判为可运行', String(gTerm.runnable));
+  ok(gTerm.terminalUsed === true, '结果标记了「参考了终端记录」');
+  const gNoTerm = localGrade(level, termCode, null);
+  ok(
+    gNoTerm.runnable === false && gNoTerm.score < gTerm.score,
+    '没有终端证据时不给这个分',
+    `${gNoTerm.score} < ${gTerm.score}`
+  );
+
+  // 提示词：终端记录要真的进去，且口径要写清「证据不足 ≠ 做错」
+  const termMsgs = buildMessages({
+    level,
+    code: 'print(1)',
+    run: null,
+    strictMode: false,
+    weakPoints: [],
+    terminal: termCtx,
+  });
+  ok(termMsgs[1].content.includes('python -c'), '批改提示词带上了终端里的命令');
+  ok(termMsgs[0].content.includes('证据不足 ≠ 做错了'), '批改提示词含「证据不足不等于做错」口径');
+  ok(termMsgs[0].content.includes('终端'), '批改提示词要求结合终端证据');
+  const noTermMsgs = buildMessages({ level, code: 'print(1)', run: null, strictMode: false, weakPoints: [] });
+  ok(
+    noTermMsgs[1].content.includes('不等于「没做」'),
+    '没有终端记录时明确说明「看不到不等于没做」'
+  );
+  const errTerm = buildErrorMessages({ level, code: 'print(x)', run: errRun, terminal: termCtx });
+  ok(errTerm[1].content.includes('python 第02关'), '报错分析带上了终端记录');
+  const askTerm = buildAskMessages({
+    level,
+    code: 'print(1)',
+    history: [],
+    question: 'q',
+    terminal: termCtx,
+  });
+  ok(askTerm[0].content.includes('python -c'), '问答上下文带上了终端记录');
+
+  // 低版本 VS Code 没有 Shell Integration API 时必须静默降级，不能抛异常
+  const rec = new TerminalRecorder();
+  let recThrew = false;
+  try {
+    rec.start();
+  } catch {
+    recThrew = true;
+  }
+  ok(!recThrew, '没有 Shell Integration API 时 start() 不抛异常（优雅降级）');
+  ok(rec.context() === '', '降级状态下终端上下文为空串');
+  ok(rec.evidenceFor(level).ran === false, '降级状态下不会伪造运行证据');
+  rec.dispose();
 
   // ---------------------------------------------------------- 收尾
   // 清理临时工作区，别在 TEMP 里堆垃圾

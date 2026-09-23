@@ -13,6 +13,7 @@ import * as vscode from 'vscode';
 import type { GradeResult, Level, RunResult } from './types';
 import { chat, AiError } from '../ai/client';
 import { buildMessages } from '../ai/prompt';
+import { analyzeTerminalForLevel } from './terminal';
 
 /** 调用模型的通用参数（批改与求解答共用） */
 export interface AiCallOptions {
@@ -31,6 +32,8 @@ export interface GradeOptions extends AiCallOptions {
   weakPoints: string[];
   /** 解析彻底失败时是否自动重试一次（默认开） */
   retryOnBadJson?: boolean;
+  /** 学生在集成终端里的命令与输出（已格式化），作为可运行性的补充证据 */
+  terminal?: string | null;
 }
 
 const clamp = (n: unknown, min = 0, max = 100): number => {
@@ -436,8 +439,20 @@ export function normalizeAiResult(raw: string, level: Level): GradeResult | null
   };
 }
 
-/** 本地启发式评分：没有 AI 时的兜底，只做「能跑 + 有内容 + 有注释」的粗判 */
-export function localGrade(level: Level, code: string, run: RunResult | null): GradeResult {
+/**
+ * 本地启发式评分：没有 AI 时的兜底，只做「能跑 + 有内容 + 有注释」的粗判。
+ *
+ * terminal 是学生在集成终端里的运行证据。为什么必须传进来：
+ * 学生很可能自己已经在终端里跑通了（`python 第02关_xx.py`），
+ * 而插件这次本地运行因为路径 / 编码等外部原因失败 —— 那就不能判他"不可运行"。
+ * 但这是**间接证据**，给的分要略低于直接跑通。
+ */
+export function localGrade(
+  level: Level,
+  code: string,
+  run: RunResult | null,
+  terminal?: string | null
+): GradeResult {
   const lines = code.split('\n');
   const codeLines = lines.filter((l) => {
     const t = l.trim();
@@ -446,13 +461,30 @@ export function localGrade(level: Level, code: string, run: RunResult | null): G
   const commentLines = lines.filter((l) => l.trim().startsWith('#'));
   const studentComments = commentLines.filter((l) => !/^#\s*(第\s*\d+\s*关|今日目标|示例代码|本关练习|写完后)/.test(l.trim()));
 
+  // 终端证据：文本里出现过本关文件名 / 关卡 ID 就算「他跑过这一关」。
+  // 用一条合成记录复用 analyzeTerminalForLevel 的匹配规则，避免两处规则漂移。
+  const termText = (terminal ?? '').trim();
+  const terminalEvidence = analyzeTerminalForLevel(
+    termText ? [{ terminal: '终端', command: termText, output: termText, at: 0 }] : [],
+    level
+  );
+  const terminalSaysOk = terminalEvidence.ran && terminalEvidence.clean;
+  const usedTerminal = !!termText && terminalEvidence.ran;
+
   const runnable = run ? run.ok : false;
+  const effectiveRunnable = runnable || terminalSaysOk;
   const issues: string[] = [];
   const suggestions: string[] = [];
 
   let score = 0;
   if (runnable) {
     score += 45;
+  } else if (terminalSaysOk) {
+    // 终端里跑通过、插件这次没跑通：给分，但略低于直接跑通
+    score += 38;
+    issues.push(
+      '插件这次没能跑通你的代码，但终端记录显示你自己跑成功过 —— 本次按终端证据判定为可运行。若两者不一致，注意先保存文件再提交。'
+    );
   } else if (run?.noInterpreter) {
     score += 20;
     issues.push('本机未找到 Python 解释器，无法验证代码是否可运行。');
@@ -478,27 +510,29 @@ export function localGrade(level: Level, code: string, run: RunResult | null): G
   } else {
     suggestions.push('给关键步骤加注释，说明"这一步在算什么"。');
   }
-  if (run?.stdout && run.stdout.trim().length > 0) {
+  if ((run?.stdout && run.stdout.trim().length > 0) || terminalSaysOk) {
     score += 10;
   }
   score = Math.max(0, Math.min(85, score));
 
   const label = `第 ${level.day} 关「${level.title}」`;
+  const evidenceNote = usedTerminal ? '（已参考你在集成终端里的运行记录）' : '';
 
   return {
     score,
-    runnable,
-    correctness: runnable ? Math.min(60, score) : 0,
+    runnable: effectiveRunnable,
+    correctness: effectiveRunnable ? Math.min(60, score) : 0,
     quality: studentComments.length >= 2 ? 70 : 50,
-    summary: runnable
-      ? `${label} 本地检查：代码可以运行。（AI 批改未开启，未判断 ${level.exercises.length} 道练习答案的正确性）`
+    summary: effectiveRunnable
+      ? `${label} 本地检查：代码可以运行。${evidenceNote}（AI 批改未开启，未判断 ${level.exercises.length} 道练习答案的正确性）`
       : `${label} 本地检查：代码未能通过运行，先解决报错。`,
-    strengths: runnable ? ['代码能够无报错运行'] : [],
+    strengths: effectiveRunnable ? ['代码能够无报错运行'] : [],
     issues,
     suggestions,
     weakTags: run?.errorKind ? [run.errorKind] : [],
     exerciseChecks: [],
     source: 'local',
+    terminalUsed: usedTerminal || undefined,
   };
 }
 
@@ -515,8 +549,10 @@ export async function gradeCode(
   run: RunResult | null,
   opts: GradeOptions
 ): Promise<GradeOutcome> {
+  const terminal = (opts.terminal ?? '').trim() || null;
+
   if (!opts.enableAI) {
-    return { result: localGrade(level, code, run) };
+    return { result: localGrade(level, code, run, terminal) };
   }
 
   const messages = buildMessages({
@@ -525,6 +561,7 @@ export async function gradeCode(
     run,
     strictMode: opts.strictMode,
     weakPoints: opts.weakPoints,
+    terminal,
   });
 
   const callModel = (temperature: number) =>
@@ -561,7 +598,7 @@ export async function gradeCode(
     }
 
     if (!parsed) {
-      const fallback = localGrade(level, code, run);
+      const fallback = localGrade(level, code, run, terminal);
       return {
         result: { ...fallback, raw },
         aiError:
@@ -574,13 +611,17 @@ export async function gradeCode(
           raw.slice(0, 400),
       };
     }
+    // 标记「这次批改参考了终端记录」，UI 会显示出来让学生知道证据来源
+    if (terminal) {
+      parsed.terminalUsed = true;
+    }
     return { result: parsed };
   } catch (err: any) {
     const msg =
       err instanceof AiError
         ? `${err.message}${err.detail ? `\n${err.detail}` : ''}`
         : String(err?.message ?? err);
-    const fallback = localGrade(level, code, run);
+    const fallback = localGrade(level, code, run, terminal);
     return { result: fallback, aiError: msg };
   }
 }
@@ -595,6 +636,6 @@ export async function promptAiSetup(message: string): Promise<void> {
     '知道了'
   );
   if (pick === '打开设置') {
-    await vscode.commands.executeCommand('pythonCamp.openSettings');
+    await vscode.commands.executeCommand('pythonCamp.openConfig');
   }
 }

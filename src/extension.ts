@@ -19,6 +19,7 @@ import { Curriculum } from './core/curriculum';
 import { Scheduler } from './core/scheduler';
 import { StudyTimer } from './core/timer';
 import { runFile } from './core/runner';
+import { TerminalRecorder } from './core/terminal';
 import { gradeCode, promptAiSetup, extractJson } from './core/grader';
 import {
   generateLevelAnswer,
@@ -56,6 +57,8 @@ let timer: StudyTimer;
 let vmb: ViewModelBuilder;
 let sidebar: SidebarProvider;
 let statusBar: vscode.StatusBarItem;
+/** 集成终端记录（把学生自己敲的 python 命令与输出作为批改证据） */
+let terminalRecorder: TerminalRecorder;
 /** AI 诊断日志（测试连接、调用失败时的详细信息） */
 let aiLog: vscode.OutputChannel;
 
@@ -82,8 +85,37 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   await store.load();
 
   const cfg = readConfig();
+
+  // 进度自愈：历史数据可能因为「过线分数被外部插件顶高」而留下
+  // 「明明过关了、面板却显示未过关」的痕迹，这里按最好成绩重新对齐一次。
+  const healed = await store.reconcile(cfg.passScore);
+  if (healed) {
+    void vscode.window.showInformationMessage(
+      '检测到进度档案里有过关记录未同步（可能由其它同名插件改动了过关线），已自动修正。'
+    );
+  }
+
   scheduler = new Scheduler(store, curriculum);
   vmb = new ViewModelBuilder(store, curriculum, scheduler);
+
+  // 集成终端记录（VS Code 1.93+；低版本静默降级）
+  terminalRecorder = new TerminalRecorder();
+  terminalRecorder.setEnabled(cfg.terminalContext);
+  terminalRecorder.start();
+  context.subscriptions.push({
+    dispose: () => terminalRecorder.dispose(),
+  });
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('pythonCamp.terminalContext')) {
+        terminalRecorder.setEnabled(readConfig().terminalContext);
+      }
+    })
+  );
+
+  // 装了同名插件就提醒 —— 两个插件会共用活动栏容器 ID 与配置键，
+  // 造成「两个图标长得不一样」「进度各存各的」这类莫名其妙的症状。
+
 
   // 每日任务派发
   const assigned = await scheduler.ensureToday({
@@ -121,6 +153,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(aiLog);
 
   registerCommands(context);
+
+  // 同名插件冲突检测（放在 aiLog 之后，日志才写得进去）
+  void warnOnConflictingExtension();
 
   // 进度变化时刷新所有 UI
   context.subscriptions.push(
@@ -190,6 +225,65 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 export async function deactivate(): Promise<void> {
   await timer?.dispose();
+}
+
+/** 本插件的完整标识（用于识别「同名插件」） */
+const OUR_EXT_ID = 'gude123-ux.python-challenge-camp';
+
+/**
+ * 检测工作区里是否同时装了**另一个同名插件**。
+ *
+ * 为什么会这样：本机曾出现两个 displayName 都叫「Python闯关训练营」的插件，
+ * 它们
+ *   * 活动栏容器 ID 都是 pythonCamp → 两个视图被合并到一个图标里，看起来"少了东西"；
+ *   * 都声明了 pythonCamp.passScore → 默认值互相覆盖，75 分时而过关时而不算；
+ *   * 各自把进度写进不同的目录（.pythoncamp / .python-camp）→ 进度互不可见。
+ * 学生看到的现象就是「打开快捷方式弹出两个不一样的窗口」「过了两关另一个没显示」。
+ *
+ * 这里不静默处理，而是**明确告知并给一个卸载按钮**（卸载动作由 VS Code 自己执行，
+ * 用户随时可以取消）。
+ */
+async function warnOnConflictingExtension(): Promise<void> {
+  try {
+    // 防御式取值：某些宿主 / 测试替身里没有 extensions API，
+    // 这个检查只是"锦上添花"，绝不能因为它让激活失败。
+    const all = vscode.extensions?.all ?? [];
+    const conflicts = all.filter((ext) => {
+      if (ext.id === OUR_EXT_ID) {
+        return false;
+      }
+      const name = ext.packageJSON?.displayName ?? '';
+      const pkgName = ext.packageJSON?.name ?? '';
+      return name === 'Python闯关训练营' || pkgName === 'python-challenge-camp';
+    });
+    if (!conflicts.length) {
+      return;
+    }
+
+    const list = conflicts.map((c) => `${c.id} v${c.packageJSON?.version ?? '?'}`).join('、');
+    aiLog.appendLine(`[冲突检测] 发现同名插件：${list}`);
+
+    const pick = await vscode.window.showWarningMessage(
+      `检测到另一个同名插件「Python闯关训练营」（${list}）。它和本插件会互相干扰：` +
+        '两个图标看起来不一样、进度各存各的、过关分数线还会互相覆盖。建议卸载它。',
+      '卸载它',
+      '稍后再说'
+    );
+    if (pick !== '卸载它') {
+      return;
+    }
+    for (const c of conflicts) {
+      try {
+        await vscode.commands.executeCommand('workbench.extensions.uninstallExtension', c.id);
+      } catch {
+        void vscode.window.showWarningMessage(
+          `自动卸载 ${c.id} 失败，请在「扩展」面板里手动卸载它。`
+        );
+      }
+    }
+  } catch (err: any) {
+    aiLog.appendLine(`[冲突检测] 检查失败（不影响使用）：${String(err?.message ?? err)}`);
+  }
 }
 
 // ------------------------------------------------------------------ 命令
@@ -291,10 +385,10 @@ function registerCommands(context: vscode.ExtensionContext): void {
     await exportReport(context);
   });
 
-  reg('pythonCamp.openSettings', async () => {
+  reg('pythonCamp.openConfig', async () => {
     await vscode.commands.executeCommand(
       'workbench.action.openSettings',
-      '@ext:zhongou-aviation.python-challenge-camp'
+      '@ext:gude123-ux.python-challenge-camp'
     );
   });
 
@@ -559,6 +653,9 @@ async function submitLevel(
       }
       lastRun = run;
 
+      // 终端证据：学生可能自己在集成终端里跑过（课程材料里有些练习就是这么做的）
+      const terminal = cfg.terminalContext ? terminalRecorder.context() : '';
+
       progress.report({ message: cfg.enableAI && aiReady(cfg) ? 'AI 判分中…' : '本地评分中…' });
       const outcome = await gradeCode(level, code, run, {
         apiKey: cfg.apiKey,
@@ -570,9 +667,39 @@ async function submitLevel(
         maxTokens: cfg.maxTokens,
         timeoutSec: cfg.aiTimeoutSec,
         retryOnBadJson: cfg.retryOnBadJson,
+        terminal,
       });
 
       const result = outcome.result;
+
+      // ★ AI 批改没跑成时（限流 / 网络 / 超时 / 返回被截断…），不要把它当成一次成绩。
+      //   否则一次 429 就会给出一份封顶 85 的本地参考分，学生看到"未过关"，
+      //   实际上根本没被真正批改过 —— 用户实测就吃过这个亏（AI 打分偏低）。
+      const aiFailed = !!outcome.aiError && aiReady(cfg);
+      if (aiFailed) {
+        const reason = (outcome.aiError ?? '').split('\n')[0];
+        lastGrade = {
+          ...result,
+          issues: [
+            `⚠️ 本次 AI 批改未完成，下面的分数只是本地检查的参考分，**不计入过关判定**。原因：${reason}`,
+            ...result.issues,
+          ],
+        };
+        showLevelPanel(level, context);
+        const pick = await vscode.window.showWarningMessage(
+          `第 ${level.day} 关：AI 批改未完成（${reason}）。本次不记成绩。`,
+          '重试 AI 批改',
+          '查看日志',
+          '先不批改'
+        );
+        if (pick === '重试 AI 批改') {
+          await submitLevel(level, context, document);
+        } else if (pick === '查看日志') {
+          aiLog.show(true);
+        }
+        return;
+      }
+
       lastGrade = result;
 
       // 落库
@@ -606,7 +733,11 @@ async function submitLevel(
         if (result.score >= cfg.passScore) {
           lp.status = 'passed';
           lp.passedAt = lp.passedAt ?? new Date().toISOString();
-        } else {
+        } else if (lp.status !== 'passed' && lp.bestScore < cfg.passScore) {
+          // 只在「从来没到过线」时才退回未过关。
+          // 早期版本这里无条件写 unlocked —— 一旦过线分数被外部因素调高
+          // （例如另一个同名插件覆盖了 pythonCamp.passScore 的默认值），
+          // 已经过关的关卡会莫名其妙地"退回未过关"，学生看到的就是"进度倒退了"。
           lp.status = 'unlocked';
         }
         p.levels[level.id] = lp;
@@ -616,7 +747,12 @@ async function submitLevel(
       if (result.weakTags.length) {
         await store.addWeakPoints(result.weakTags);
       }
-      if (result.score >= cfg.passScore) {
+
+      // 本次到线、或历史上已经到过线，都算「今日这一关完成」——
+      // 否则重刷一次拿低分就会把今日进度抹掉。
+      const passed =
+        result.score >= cfg.passScore || store.progress.levels[level.id]?.bestScore >= cfg.passScore;
+      if (passed) {
         await scheduler.markDoneIfToday(level.id);
       }
 
@@ -624,11 +760,6 @@ async function submitLevel(
       sidebar.refresh();
       refreshStatusBar();
 
-      if (outcome.aiError) {
-        void vscode.window.showWarningMessage(`AI 批改未成功：${outcome.aiError}`);
-      }
-
-      const passed = result.score >= cfg.passScore;
       const msg = `第 ${level.day} 关：${result.score} 分${passed ? '，已过关！' : `（过关线 ${cfg.passScore} 分）`}`;
       if (passed) {
         const next = curriculum.nextOf(level.id);
@@ -725,7 +856,7 @@ async function testConnection(): Promise<void> {
       '知道了'
     );
     if (pick === '打开设置') {
-      await vscode.commands.executeCommand('pythonCamp.openSettings');
+      await vscode.commands.executeCommand('pythonCamp.openConfig');
     }
     return;
   }
@@ -788,7 +919,7 @@ async function testConnection(): Promise<void> {
       '查看日志'
     );
     if (pick === '打开设置') {
-      await vscode.commands.executeCommand('pythonCamp.openSettings');
+      await vscode.commands.executeCommand('pythonCamp.openConfig');
     } else if (pick === '查看日志') {
       aiLog.show(true);
     }
@@ -1074,7 +1205,8 @@ async function diagnoseError(
 
       progress.report({ message: 'AI 正在定位原因…' });
       try {
-        const md = await generateErrorDiagnosis(level, code, run, aiTaskOptions(cfg));
+        const terminal = cfg.terminalContext ? terminalRecorder.context() : '';
+        const md = await generateErrorDiagnosis(level, code, run, aiTaskOptions(cfg), terminal);
         lastDiagnosis = { levelId: level.id, markdown: md };
         showLevelPanel(level, context);
         aiLog.appendLine(`[报错分析] 第 ${level.day} 关：${run.errorKind ?? '未识别类型'}`);
@@ -1149,7 +1281,15 @@ async function askQuestion(text: string, context: vscode.ExtensionContext): Prom
 
   chatPanel?.setBusy(true, 'AI 正在思考…');
   try {
-    const answer = await askAssistant(level, code, chatHistory, question, aiTaskOptions(cfg));
+    const terminal = cfg.terminalContext ? terminalRecorder.context(2000) : '';
+    const answer = await askAssistant(
+      level,
+      code,
+      chatHistory,
+      question,
+      aiTaskOptions(cfg),
+      terminal
+    );
     chatHistory.push({ role: 'user', content: question });
     chatHistory.push({ role: 'assistant', content: answer });
     // 历史别无限增长：只留最近 10 轮，控制 token 开销
@@ -1356,7 +1496,7 @@ async function handleWebviewMessage(
       await vscode.commands.executeCommand('pythonCamp.pickLevel');
       break;
     case 'openSettings':
-      await vscode.commands.executeCommand('pythonCamp.openSettings');
+      await vscode.commands.executeCommand('pythonCamp.openConfig');
       break;
     case 'exportReport':
       await exportReport(context);

@@ -2,19 +2,29 @@
 /**
  * launch.js —— 一键启动器
  *
- * 双击桌面快捷方式时实际跑的就是这个脚本。它按顺序做四件事：
+ * 双击桌面快捷方式时实际跑的就是这个脚本。它按顺序做五件事：
  *   1. 检查 Node / 安装依赖（只在缺的时候做）
  *   2. 编译插件（esbuild，几十毫秒）
  *   3. 找到 VS Code 的可执行文件（**优先正版 VS Code**，不是 PATH 里第一个 code）
- *   4. 准备好学习工作区，然后带着插件启动 VS Code
+ *   4. 把插件**安装进 VS Code**（版本没变就跳过），并检查有没有同名插件在捣乱
+ *   5. 准备好学习工作区，然后打开 VS Code
+ *
+ * 为什么默认是「安装模式」而不是开发宿主模式：
+ *   开发宿主（--extensionDevelopmentPath）每次都会**新开一个窗口**，
+ *   标题还带「扩展开发宿主」；如果用户自己还开着一个普通 VS Code 窗口，
+ *   就会看到两个长得不一样的窗口，而且开发宿主里的进度和普通窗口不共享 ——
+ *   用户实测反馈过「弹出两个 vscode，而且不一样，另一个没显示进度」。
+ *   装进 VS Code 之后，双击快捷方式只会打开/聚焦同一个窗口，进度也只有一份。
+ *   需要边改代码边调试时才用 --dev。
  *
  * 为什么不用 .bat 写逻辑：Windows 中文系统的 cmd 默认代码页是 GBK，
  * 批处理里的中文会乱码。所以 .cmd 只做「找到 node 并调用本脚本」这一件纯 ASCII 的事，
  * 所有中文输出和判断都放在这里 —— Node 走 WriteConsoleW，中文在 cmd 里正常显示。
  *
  * 用法：
- *   node scripts/launch.js                  启动（开发宿主模式，始终用最新代码）
- *   node scripts/launch.js --install        打包 vsix 并永久安装到 VS Code，再启动
+ *   node scripts/launch.js                  安装（必要时）并启动
+ *   node scripts/launch.js --dev            以开发宿主模式启动（始终用最新代码，会新开窗口）
+ *   node scripts/launch.js --install        强制重新打包并安装，再启动
  *   node scripts/launch.js --check          只做环境诊断，不启动
  *   node scripts/launch.js --workspace D:\py 指定学习工作区
  *   node scripts/launch.js --help           帮助
@@ -28,7 +38,7 @@ const path = require('path');
 const { spawnSync, spawn } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
-const EXT_ID = 'zhongou-aviation.python-challenge-camp';
+const EXT_ID = 'gude123-ux.python-challenge-camp';
 
 const args = process.argv.slice(2);
 const flag = (name) => args.includes(name);
@@ -271,6 +281,86 @@ function resolveExe(codeCmd) {
 
 // ------------------------------------------------------------------ 步骤 5：学习工作区
 
+/** 已安装的扩展目录（我们自己的，按 publisher 前缀匹配） */
+function installedExtDirs(prefix = 'gude123-ux.python-challenge-camp') {
+  const home = os.homedir();
+  const roots = [
+    path.join(home, '.vscode', 'extensions'),
+    path.join(home, '.vscode-insiders', 'extensions'),
+  ];
+  const out = [];
+  for (const root of roots) {
+    if (!exists(root)) {
+      continue;
+    }
+    let names = [];
+    try {
+      names = fs.readdirSync(root);
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      if (name.startsWith(prefix)) {
+        out.push(path.join(root, name));
+      }
+    }
+  }
+  return out;
+}
+
+/** 本插件已安装的版本（没装则返回 null） */
+function installedVersion() {
+  for (const dir of installedExtDirs()) {
+    const m = /-(\d+\.\d+\.\d+[^-]*)$/.exec(path.basename(dir));
+    if (m) {
+      return { dir, version: m[1] };
+    }
+  }
+  return null;
+}
+
+/**
+ * 检测**另一个同名插件**。
+ *
+ * 这是用户实测踩到的坑：两个 displayName 都叫「Python闯关训练营」的插件，
+ * 活动栏容器 ID 都是 pythonCamp、都声明了 pythonCamp.passScore（默认值 60 / 80 不同），
+ * 于是图标混在一起、过关线互相覆盖、进度各写各的目录。
+ * 这里只做「发现 + 明确告知」，不擅自删用户的东西。
+ */
+function checkConflictingExtensions() {
+  const home = os.homedir();
+  const roots = [
+    path.join(home, '.vscode', 'extensions'),
+    path.join(home, '.vscode-insiders', 'extensions'),
+  ];
+  const found = [];
+  for (const root of roots) {
+    if (!exists(root)) {
+      continue;
+    }
+    let names = [];
+    try {
+      names = fs.readdirSync(root);
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      if (/\.python-challenge-camp-/.test(name) && !name.startsWith('gude123-ux.')) {
+        found.push(name);
+      }
+    }
+  }
+  if (!found.length) {
+    good('没有发现同名插件冲突');
+    return true;
+  }
+  warn(`发现另一个同名插件：${found.join('、')}`);
+  info(dim('它会和本插件抢活动栏图标、抢过关线配置，进度也各存各的（所以两边看到的进度不一样）。'));
+  info(dim('插件启动后会弹窗提示，点「卸载它」即可；也可以在「扩展」面板里手动卸载。'));
+  logLine(`CONFLICT extensions=${found.join(',')}`);
+  return false;
+}
+
 function prepareWorkspace(dir) {
   if (!exists(dir)) {
     fs.mkdirSync(dir, { recursive: true });
@@ -330,7 +420,29 @@ function launch(editor, workspace, extraArgs) {
   return child;
 }
 
-// ------------------------------------------------------------------ --install 模式
+// ------------------------------------------------------------------ 安装模式
+
+/**
+ * 确保插件已按当前版本安装到 VS Code。
+ *
+ * 版本号没变就直接跳过打包 —— 双击启动是高频动作，
+ * 每次都跑一遍 vsce 会让启动慢十几秒。改了代码就顺手把 package.json 的
+ * version 抬一下（或者用 --install 强制重装）。
+ */
+function ensureInstalled(editor) {
+  const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+  const cur = installedVersion();
+  if (cur && cur.version === pkg.version && !flag('--install')) {
+    good(`插件已安装：${EXT_ID}@${cur.version}（跳过打包）`);
+    return true;
+  }
+  if (cur) {
+    info(`本地版本 ${pkg.version}，已安装 ${cur.version} —— 需要更新`);
+  } else {
+    info('插件尚未安装到 VS Code，正在打包…');
+  }
+  return packageAndInstall(editor);
+}
 
 function packageAndInstall(editor) {
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
@@ -363,21 +475,33 @@ function packageAndInstall(editor) {
   good(`vsix：${path.basename(vsix)}`);
 
   info('安装到 VS Code…');
-  const cli = editor.cmd || editor.exe;
-  const r = spawnSync(cli, ['--install-extension', vsix, '--force'], {
+  // 注意：安装目录里带空格（...\Microsoft VS Code\bin\code.cmd），
+  // 早期版本用 shell:true 直接拼路径，会被 cmd 从空格处截断，
+  // 报「'C:\Users\...\Microsoft' 不是内部或外部命令」——所以优先用 Code.exe 直接调，
+  // 非 .exe（如 PATH 里的 .cmd）才走 shell 并显式加引号。
+  const cli = editor.exe || editor.cmd;
+  const useShell = !/\.exe$/i.test(cli);
+  const r = spawnSync(useShell ? `"${cli}"` : cli, ['--install-extension', vsix, '--force'], {
     stdio: 'pipe',
     encoding: 'utf8',
-    shell: !/\.exe$/i.test(cli),
+    shell: useShell,
   });
   const output = `${r.stdout || ''}${r.stderr || ''}`.trim();
-  if (r.status !== 0) {
-    warn(`安装失败：${output.split('\n')[0] || '未知错误'}`);
-    warn('改用开发宿主模式启动');
-    return false;
+
+  // 安装命令「成功退出但没装上」是真实存在的（VS Code 正开着、环境限制等），
+  // 所以不看退出码，直接看扩展目录里到底有没有这个版本。
+  const after = installedVersion();
+  if (after && after.version === pkg.version) {
+    good(`已安装 ${EXT_ID}@${after.version}`);
+    warn('如果 VS Code 已经开着，需要按 Ctrl+Shift+P → Reload Window 让插件生效');
+    return true;
   }
-  good(`已安装 ${EXT_ID}@${pkg.version}`);
-  warn('如果 VS Code 已经开着，需要按 Ctrl+Shift+P → Reload Window 让插件生效');
-  return true;
+
+  warn(`安装未生效${output ? `：${output.split('\n')[0]}` : ''}`);
+  info('可以在 VS Code 里按 Ctrl+Shift+P → “Extensions: Install from VSIX…” 手动安装：');
+  info(dim(vsix));
+  warn('改用开发宿主模式启动');
+  return false;
 }
 
 // ------------------------------------------------------------------ --check
@@ -418,6 +542,16 @@ function runCheck() {
   if (!editor) {
     bad('没有找到任何 VS Code 可执行文件');
   }
+  const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+  const cur = installedVersion();
+  if (cur && cur.version === pkg.version) {
+    good(`插件已安装：${EXT_ID}@${cur.version}`);
+  } else if (cur) {
+    warn(`已安装 ${cur.version}，本地是 ${pkg.version} —— 启动时会自动更新`);
+  } else {
+    warn('插件尚未安装（首次启动会自动安装）');
+  }
+  checkConflictingExtensions();
 
   step(4, 5, '学习工作区');
   const ws = prepareWorkspace(opt('--workspace', path.join(os.homedir(), 'Python闯关工作区')));
@@ -447,8 +581,9 @@ function main() {
     out('');
     out(bold('  Python闯关训练营 · 一键启动器'));
     rule();
-    out('  node scripts/launch.js                启动（开发宿主模式，始终用最新代码）');
-    out('  node scripts/launch.js --install      打包并永久安装到 VS Code，再启动');
+    out('  node scripts/launch.js                安装（必要时）并启动（推荐，只有一个窗口）');
+    out('  node scripts/launch.js --dev          开发宿主模式（新开窗口，始终用最新代码）');
+    out('  node scripts/launch.js --install      强制重新打包并安装，再启动');
     out('  node scripts/launch.js --check        只做环境诊断，不启动');
     out('  node scripts/launch.js --dry-run      解析全部决策但不启动（自动化验证用）');
     out('  node scripts/launch.js --workspace D:\\py   指定学习工作区');
@@ -493,33 +628,50 @@ function main() {
     return;
   }
 
-  step(5, 5, '准备工作区并启动');
+  step(5, 5, '安装插件、准备工作区并启动');
+
+  const conflictFree = checkConflictingExtensions();
+
   const workspace = prepareWorkspace(opt('--workspace', path.join(os.homedir(), 'Python闯关工作区')));
 
-  const installMode = flag('--install');
+  const devMode = flag('--dev');
+  const pkgVersion = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
+  const cur = installedVersion();
+  const willInstall = !devMode && (!cur || cur.version !== pkgVersion || flag('--install'));
 
-  let extraArgs;
-  if (installMode && packageAndInstall(editor)) {
-    extraArgs = [];
-    info('以已安装插件的方式启动（无「扩展开发宿主」标题）');
-  } else {
-    extraArgs = [`--extensionDevelopmentPath=${ROOT}`];
-    if (installMode) {
-      info('以开发宿主模式启动（始终使用最新代码）');
-    }
-  }
-
-  // --dry-run：只把决策结果打印出来，不真的启动编辑器（便于自动化验证）
+  // --dry-run：只把决策结果打印出来，**不安装、不启动**（便于自动化验证）
   if (flag('--dry-run')) {
+    // 注意：只有开发宿主模式才传 --extensionDevelopmentPath。
+    // 「先安装再打开」走的是安装模式 —— 参数里只有工作区，所以不会多开窗口。
+    const argv = devMode ? [`--extensionDevelopmentPath=${ROOT}`, workspace] : [workspace];
     out('');
     rule();
-    out(bold('  [dry-run] 不会真的启动编辑器'));
+    out(bold('  [dry-run] 不会真的安装或启动'));
     out(`      可执行文件：${editor.exe || editor.cmd}`);
-    out(`      参数：${JSON.stringify([...extraArgs, workspace])}`);
+    out(`      模式：${devMode ? '开发宿主' : willInstall ? `先安装 ${pkgVersion} 再打开` : '已安装插件'}`);
+    out(`      已安装版本：${cur ? cur.version : '（未安装）'}`);
+    out(`      参数：${JSON.stringify(argv)}`);
     out(`      工作区：${workspace}`);
+    out(`      同名插件冲突：${conflictFree ? '无' : '有（见上面的警告）'}`);
     out('');
-    logLine(`DRYRUN editor=${editor.exe || editor.cmd} argv=${JSON.stringify([...extraArgs, workspace])}`);
+    logLine(`DRYRUN editor=${editor.exe || editor.cmd} mode=${devMode ? 'dev' : willInstall ? 'install' : 'installed'} argv=${JSON.stringify(argv)}`);
     return;
+  }
+
+  let extraArgs;
+  if (devMode) {
+    extraArgs = [`--extensionDevelopmentPath=${ROOT}`];
+    info('开发宿主模式：会新开一个「扩展开发宿主」窗口（调试用，进度与普通窗口共享）');
+  } else if (ensureInstalled(editor)) {
+    extraArgs = [];
+    info('以已安装插件的方式启动（不会新开额外窗口）');
+  } else {
+    extraArgs = [`--extensionDevelopmentPath=${ROOT}`];
+    warn('安装未成功，退回开发宿主模式启动');
+  }
+
+  if (!conflictFree) {
+    warn('启动后请留意弹窗提示，卸载那个同名插件即可彻底解决进度/图标混乱。');
   }
 
   try {

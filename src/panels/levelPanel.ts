@@ -78,6 +78,9 @@ function gradeBlock(g) {
       '<span>正确性：<b>' + g.correctness + '</b></span>' +
       '<span>代码质量：<b>' + g.quality + '</b></span>' +
     '</div>' +
+    (g.terminalUsed
+      ? '<div class="muted" style="font-size:11px;margin-top:6px">本次批改已参考你在集成终端里的 Python 命令与输出（终端里做过的练习不会再被当成没做）。</div>'
+      : '') +
     '<h4>总评</h4><div>' + esc(g.summary) + '</div>';
 
   if (g.exerciseChecks && g.exerciseChecks.length) {
@@ -142,10 +145,10 @@ function render() {
 
   if (L.manualExample) {
     h += '<h3 class="blk">示例代码（照着复现一遍）</h3><pre class="code">' + esc(L.manualExample) + '</pre>' +
-      '<div class="muted" style="font-size:11px">这段代码是本关的复现目标，先在编辑器里亲手敲一遍并跑通，再去做下面的练习。</div>';
+      '<div class="muted" style="font-size:11px">这段代码来自你手上的课程材料，先在编辑器里亲手敲一遍并跑通，再去做下面的练习。</div>';
   }
 
-  h += '<h3 class="blk">本关练习</h3><ol class="ex">' +
+  h += '<h3 class="blk">编程练习题</h3><ol class="ex">' +
     L.exercises.map(function (e) { return '<li>' + esc(e) + '</li>'; }).join('') + '</ol>';
 
   if (L.accept) h += '<h3 class="blk">验收标准</h3><div class="card">' + esc(L.accept) + '</div>';

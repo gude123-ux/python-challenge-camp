@@ -66,14 +66,23 @@ export async function generateLevelAnswer(level: Level, opts: TextTaskOptions): 
  *
  * 只在本地运行**失败**时才有意义 —— 所以 run 一般是有的，
  * 但保留 null 分支以防「解释一个逻辑错误而非语法错误」的场景。
+ *
+ * terminal：学生在集成终端里的命令与输出。学生自己跑出来的 traceback
+ * 往往比插件跑的那次更贴近他的实际操作（例如他跑的是别的文件名、或改了参数），
+ * 有了它模型才不会"分析错对象"。
  */
 export async function generateErrorDiagnosis(
   level: Level,
   code: string,
   run: RunResult | null,
-  opts: TextTaskOptions
+  opts: TextTaskOptions,
+  terminal?: string | null
 ): Promise<string> {
-  return runTask(buildErrorMessages({ level, code, run }) as ChatMessage[], opts, 0.2);
+  return runTask(
+    buildErrorMessages({ level, code, run, terminal }) as ChatMessage[],
+    opts,
+    0.2
+  );
 }
 
 /** 同一道题的多种解法（Markdown） */
@@ -96,9 +105,10 @@ export async function askAssistant(
   code: string,
   history: Array<{ role: 'user' | 'assistant'; content: string }>,
   question: string,
-  opts: TextTaskOptions
+  opts: TextTaskOptions,
+  terminal?: string | null
 ): Promise<string> {
-  const messages = buildAskMessages({ level, code, history, question }) as ChatMessage[];
+  const messages = buildAskMessages({ level, code, history, question, terminal }) as ChatMessage[];
   // 问答要的是「快而准」，不需要长篇大论
   return runTask(messages, opts, 0.3, 2500, 120);
 }

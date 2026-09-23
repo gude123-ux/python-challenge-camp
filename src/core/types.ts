@@ -4,11 +4,11 @@
  * 所有持久化结构都带 schemaVersion，方便后续升级时做迁移。
  */
 
-/** 题库里的一个关卡 */
+/** 题库里的一个关卡（由你自己的生成脚本产出） */
 export interface Level {
   /** 关卡 ID，如 L01 / A07 */
   id: string;
-  /** 序号（专项关卡可用扩展编号） */
+  /** 对应课程第几天（专项关卡为扩展编号） */
   day: number;
   /** 所属章节号 */
   chapter: number;
@@ -17,17 +17,17 @@ export interface Level {
   /** 1-5 难度 */
   difficulty: number;
   estimatedMinutes: number;
-  /** 今日目标（一句话） */
+  /** 本关目标（一句话） */
   goal: string;
-  /** 知识点简述 */
+  /** 知识点简述（来自课程材料正文的讲解段落） */
   knowledge: string[];
-  /** 本关练习题 */
+  /** 编程练习题 */
   exercises: string[];
   /** 验收标准 */
   accept: string;
   /** 迁移视角 */
   transfer: string;
-  /** 参考示例代码（复现目标，仅供参考） */
+  /** 原始示例代码（排版折行处可能不完整，仅供参考） */
   manualExample: string;
   /** 给学生的新建文件模板 */
   starterCode: string;
@@ -164,6 +164,8 @@ export interface GradeResult {
    * 此时分数可用，但建议列表可能不完整 —— UI 会给出提示。
    */
   salvaged?: boolean;
+  /** 本次批改参考了集成终端的命令与输出（证据来源提示） */
+  terminalUsed?: boolean;
   /** 模型返回的原始文本，便于排查 */
   raw?: string;
   /** 出错时的提示（例如 API Key 无效） */

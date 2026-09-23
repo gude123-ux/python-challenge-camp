@@ -71,6 +71,12 @@ const state = {
   messages: [],
   /** 需要用户确认时返回的选项 */
   confirmAnswer: undefined,
+  /**
+   * 模拟「已安装的其它扩展」。默认空数组。
+   * 用来测「同名插件冲突检测」：塞一个 displayName 相同的假扩展进去，
+   * activate 期间就应该弹出提醒并（用户确认后）执行卸载命令。
+   */
+  installedExtensions: [],
 };
 
 const noopDisposable = { dispose() {} };
@@ -174,6 +180,13 @@ module.exports = {
       return undefined;
     },
     getCommands: async () => state.registeredCommands,
+  },
+
+  extensions: {
+    get all() {
+      return state.installedExtensions;
+    },
+    getExtension: (id) => state.installedExtensions.find((e) => e.id === id),
   },
 
   languages: {

@@ -68,25 +68,31 @@ npm run compile
 
 ```bash
 npm install
-npm run package          # 产出 python-challenge-camp-1.0.0.vsix
-code --install-extension python-challenge-camp-1.0.0.vsix
+npm run package          # 产出 python-challenge-camp-<版本号>.vsix
+code --install-extension python-challenge-camp-<版本号>.vsix
 ```
 
 也可以在 VS Code 里 `Ctrl+Shift+P` → `Extensions: Install from VSIX...` 选择该文件。
 
 ### 方式三：一键启动（Windows）
 
-项目自带一个启动器，它会自动装依赖 → 编译 → 找到 VS Code → 建工作区 → 启动：
+项目自带一个启动器，它会自动装依赖 → 编译 → 找到 VS Code → **把插件装进 VS Code** → 建工作区 → 打开：
 
 ```bash
-node scripts/launch.js                  # 启动（开发宿主模式，始终用最新代码）
-node scripts/launch.js --install        # 打包 vsix 并永久安装，再启动
+node scripts/launch.js                  # 安装（必要时）并启动 —— 推荐，只开一个窗口
+node scripts/launch.js --dev            # 开发宿主模式（会新开窗口，始终用最新代码）
+node scripts/launch.js --install        # 强制重新打包并安装，再启动
 node scripts/launch.js --check          # 只做环境诊断，不启动
 node scripts/launch.js --dry-run        # 解析全部决策但不启动（自动化验证用）
 node scripts/launch.js --workspace D:\py  # 指定学习工作区
 ```
 
 也可以直接双击项目根目录的 `launch.cmd`。
+
+> **默认走安装模式的原因**：开发宿主模式（`--extensionDevelopmentPath`）每次都会新开一个
+> 「扩展开发宿主」窗口，和你自己开着的普通窗口并存 —— 看起来就是「双击弹出两个不一样的 VS Code」，
+> 而且两边的进度还可能各存各的。安装模式下双击只会打开/聚焦同一个窗口。
+> 启动器还会顺带检查有没有**同名插件**在抢活动栏图标和配置键。
 
 **想在桌面放一个双击即用的入口：**
 
@@ -256,6 +262,33 @@ python scripts/make-desktop-launcher.py --remove      # 从桌面删除
 分数构成：**正确性 50% + 代码质量 25% + 可运行性 25%**。
 两条硬规则：代码跑不起来总分不超过 45；只把示例代码原样复制、没做练习，正确性不超过 40。
 
+如果这次批改用上了集成终端里的记录，结果里会多一行说明：
+
+> 本次批改已参考你在集成终端里的 Python 命令与输出（终端里做过的练习不会再被当成没做）。
+
+### 集成终端证据（1.2.0 新增）
+
+课程材料里不少练习是**「在终端敲一条命令，观察输出」** —— 例如
+
+```bash
+python -c "print(2026 - 2000, 10 / 4, 10 // 4)"
+```
+
+这类证据**不可能出现在你的 .py 文件里**。早期版本只把「插件跑这个文件的结果」交给 AI，
+于是 AI 看到文件里没有这条命令，就判「练习未完成」并扣分 —— 你明明做过了。
+
+现在插件会用 VS Code 的 Shell Integration API 记录你在**集成终端**里执行的命令与输出：
+
+| 会记录 | 不会记录 |
+| --- | --- |
+| `python` / `python3` / `py` / `pip` / `conda` / `jupyter` 等 Python 相关命令 | `git`、`ssh`、`curl` 等一切其它命令（**连输出都不会读进内存**） |
+
+- 只在内存里保留最近 12 条，每条截断；随「提交并批改 / 分析报错 / 问 AI」时才发送
+- 需要 VS Code **1.93+**（低版本自动关闭该功能，不影响其它功能）
+- 想彻底禁用：设置里关掉 `pythonCamp.terminalContext`
+- 提示词里写死了一条口径：**证据不足 ≠ 做错了**。看不到某道练习的完成情况时，
+  AI 只能标「无法验证，请自己确认」，**不许扣分**
+
 ### 重刷与复习
 
 - 错题本 → 「按错题重排今日任务」：把未过关的关卡优先排进今天
@@ -422,7 +455,7 @@ python scripts/make-desktop-launcher.py --remove      # 从桌面删除
 | `pythonCamp.apiBaseUrl` | `https://api.deepseek.com/v1` | 服务地址（OpenAI 兼容） |
 | `pythonCamp.model` | `deepseek-chat` | 模型名称 |
 | `pythonCamp.enableAI` | `true` | 总开关 |
-| `pythonCamp.passScore` | `60` | 过关分数线 |
+| `pythonCamp.passLine` | `60` | 过关分数线（1.2.0 起由 `passScore` 改名，避免与同名插件的配置键撞车） |
 | `pythonCamp.dailyTaskCount` | `3` | 每天派发几关 |
 | `pythonCamp.allowSkipLevels` | `false` | 允许跳关 |
 | `pythonCamp.pythonPath` | `python` | 解释器路径，可填绝对路径 |
@@ -433,6 +466,7 @@ python scripts/make-desktop-launcher.py --remove      # 从桌面删除
 | `pythonCamp.maxTokens` | `4000` | 单次调用允许模型输出的最大 token 数。提示「输出被截断」时调大 |
 | `pythonCamp.aiTimeoutSec` | `120` | 模型响应超时（秒）。推理模型建议 180~300 |
 | `pythonCamp.retryOnBadJson` | `true` | 返回的 JSON 结构损坏时自动重试一次 |
+| `pythonCamp.terminalContext` | `true` | 把集成终端里与 Python 相关的命令与输出作为批改证据（需 VS Code 1.93+） |
 | `pythonCamp.autoDiagnoseOnError` | `true` | 本地运行失败后自动让 AI 分析报错原因 |
 
 > **用推理模型（gpt-5.x、deepseek-reasoner、o 系列等）的话**，把 `aiTimeoutSec` 调到 180~300、`maxTokens` 调到 8000。
@@ -465,11 +499,13 @@ python scripts/make-desktop-launcher.py --remove      # 从桌面删除
 
 | 你点的功能 | 发出去的内容 |
 | --- | --- |
-| 提交并批改 | 当前这一个文件的代码 + 关卡信息 + **本地运行的真实输出** |
+| 提交并批改 | 当前这一个文件的代码 + 关卡信息 + **本地运行的真实输出** + **集成终端里 Python 命令的输出** |
 | AI 分析报错 | 当前文件的代码 + 关卡信息 + **真实 traceback** |
 | AI 讲解本关 / 多种解法 | **只有关卡本身的题目与知识点**（题库内容），**不发你的代码** |
-| 问 AI 助教 | 你的问题 + 当前关卡信息 + **你当前这一关的代码**（否则答不了"我这行为什么错"） |
+| 问 AI 助教 | 你的问题 + 当前关卡信息 + **你当前这一关的代码**（否则答不了"我这行为什么错"） + **集成终端里的 Python 命令输出** |
 
+- **终端记录只收与 Python 相关的命令**（python / pip / conda / jupyter…）。`git push`、`ssh`、`curl`
+  这类命令**连输出都不会读进内存**，更不会外发；关掉 `pythonCamp.terminalContext` 可彻底禁用
 - 没有配置 API Key 时，全程零网络请求
 - 关掉 `pythonCamp.enableAI` 即彻底断网运行
 
@@ -503,6 +539,7 @@ python-challenge-camp/
 │   │   ├── curriculum.ts        题库加载、章节树、解锁判定
 │   │   ├── scheduler.ts         每日任务派发与重置
 │   │   ├── runner.ts            本地 Python 运行与报错识别
+│   │   ├── terminal.ts          集成终端记录（Shell Integration API，只收 python 相关命令）
 │   │   ├── timer.ts             学习时长统计
 │   │   └── grader.ts            批改编排 + 本地启发式兜底
 │   ├── ai/
@@ -520,9 +557,9 @@ python-challenge-camp/
 └── scripts/
     ├── launch.js                一键启动逻辑（找 node / 装依赖 / 编译 / 找 VS Code / 启动）
     ├── make-desktop-launcher.py 生成桌面启动器（CRLF + 纯 ASCII + 反斜杠路径，带自检）
-    ├── smoke.ts                 核心逻辑冒烟测试（144 项）
+    ├── smoke.ts                 核心逻辑冒烟测试（168 项）
     ├── smoke.build.js           冒烟测试打包脚本
-    ├── loadtest.js              加载测试（54 项，含启动器校验）
+    ├── loadtest.js              加载测试（71 项，含启动器校验）
     └── vscode-stub.js           测试用的 vscode 模块替身
 ```
 
@@ -537,8 +574,8 @@ npm run compile        # 打包到 out/extension.js
 npm run watch          # 监听重建
 
 npm run test           # 类型检查 + 打包 + 两套测试
-npm run test:smoke     # 核心逻辑冒烟测试（144 项）
-npm run test:load      # 加载测试（54 项，含启动器校验）
+npm run test:smoke     # 核心逻辑冒烟测试（168 项）
+npm run test:load      # 加载测试（71 项，含启动器校验）
 ```
 
 ### 两套测试分别在防什么
@@ -570,14 +607,19 @@ npm run test:load      # 加载测试（54 项，含启动器校验）
 **加载测试**（`scripts/loadtest.js`）—— 真正 `require` 打包产物并调用 `activate()`：
 
 - 模块加载期 / 激活期不报错
-- `package.json` 声明的 11 个命令**全部**已注册，且没有注册未声明的命令
-- 代码读取的 12 个配置项与 `package.json` 完全一致（改名漏改会直接报错）
+- `package.json` 声明的 16 个命令**全部**已注册，且没有注册未声明的命令
+- 代码读取的 17 个配置项与 `package.json` 完全一致（改名漏改会直接报错）
+- 活动栏容器 ID 唯一，且 `views` 的键与它一致（撞车会让两个插件的视图被合并进一个图标）
+- 过关线不再使用会与同名插件撞车的 `passScore` 键
+- **同名插件冲突检测**：塞一个假扩展进测试替身，activate 期间必须弹窗并在确认后调起卸载命令
 - 快捷键、菜单引用的命令都存在；激活事件里的视图 ID 正确
 - 激活后确实生成了 `progress.json` 并派发了今日任务
 - 释放全部订阅、事件循环清空（进程能正常退出）
 - **启动器校验**：`launch.cmd` 换行全为 CRLF、纯 ASCII、无 BOM、`goto` 标签齐全、
   失败路径有 `pause`；`launch.js --dry-run` 能跑通全部决策并选中正版 VS Code
   （桌面启动器成品校验仅在「文件存在且指向本项目」时执行，否则明确跳过）
+- **回归：默认启动模式不再是开发宿主** —— 否则每次双击都会多开一个窗口；
+  `--dry-run` 也保证零副作用（不会触发打包 / 安装）
 
 > 关于启动器的测试方式：本环境安全策略禁止调用 `cmd.exe` 与 COM，所以 `.cmd` 无法在这里
 > 真实执行。改为「静态校验批处理最容易出错的属性 + 动态验证 `launch.js` 的全部决策逻辑」。
@@ -628,6 +670,33 @@ npm run test:load      # 加载测试（54 项，含启动器校验）
 抢救成功时结果里会带一条提示，并且会**自动重试一次**争取拿到完整结果。
 
 > 三个 bug 都加了回归测试，fixture 用的都是**真实遇到的返回原文**。
+
+**Q：双击快捷方式弹出两个 VS Code 窗口，而且两个长得不一样？**
+那是「开发宿主窗口」和「普通窗口」并存。1.2.0 起启动器默认走**安装模式**：
+先把插件装进 VS Code，再打开工作区，所以只会有一个窗口，进度也只有一份。
+需要边改代码边调试时才用 `node scripts/launch.js --dev`。
+
+**Q：装了另一个同名插件，活动栏图标里的东西不对劲 / 进度对不上？**
+两个插件如果 displayName 相同，会抢同一个活动栏容器 ID 和同一批配置键
+（1.1.0 及以前两边的过关线都叫 `pythonCamp.passScore`，默认值还可能不同），
+进度还会各写各的目录。1.2.0 已把容器 ID 与配置键改成独占的名字，
+并在启动时**主动检测同名插件**，弹窗里直接给一个「卸载它」按钮。
+
+**Q：明明过了关，面板却显示未过关 / 今日进度倒退？**
+早期版本在「过线分数被外部因素改高」时会把已过关的关卡写回未过关状态。
+1.2.0 起：① 过关状态只升不降（以最好成绩为准）；② 每次激活自动跑一次进度自愈，
+把 `bestScore ≥ 过线分` 的关卡补回「已过关」并补回今日完成标记。
+
+**Q：AI 批改报 429 / `rate_limit_error`，然后给了一个偏低的分？**
+429 是模型服务的限流（`inference exceeds tpm/rpm limit`），和你的代码无关。
+1.2.0 起，**AI 批改没跑成时不再记为一次成绩**：面板里只显示本地参考分并注明「不计入过关判定」，
+同时弹窗让你选「重试 AI 批改 / 查看日志 / 先不批改」。
+要根治就换个 Key、换个模型，或等限流窗口过去（通常是分钟级）。
+
+**Q：练习是「在终端敲一条命令看输出」，我做了，AI 却说我没做？**
+1.2.0 加了**集成终端记录**（见上文），会把你在集成终端里的 python / pip 等命令及其输出
+一起交给 AI 作为证据，结果里会注明「已参考终端记录」。
+前提是 VS Code 1.93+ 且终端启用了 shell integration（默认开）。
 
 **Q：想重来一遍怎么办？**
 `Ctrl+Shift+P` → `重置全部进度`（二次确认）。或者直接删掉 `.pythoncamp/progress.json`，插件会重建。

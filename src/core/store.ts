@@ -250,4 +250,44 @@ export class ProgressStore {
     this.data.student = student;
     await this.save();
   }
+
+  /**
+   * 进度自愈（以「最好成绩」为唯一事实来源）。
+   *
+   * 真实场景：过线分数被外部因素改高之后（例如另一个同名插件把
+   * pythonCamp.passScore 的默认值顶成了 80），已经过关的关卡
+   * status 会被写成 'unlocked'、今日任务的 done 也丢了 ——
+   * 学生看到的就是「我明明过关了，面板却没显示」。
+   *
+   * 每次激活时跑一遍：只要 bestScore >= 过线分，就补回 passed 状态，
+   * 并在今天确实派发过这一关时补回今日完成标记。返回是否发生了修正。
+   */
+  async reconcile(passScore: number): Promise<boolean> {
+    let changed = false;
+    const today = todayKey();
+    const dailyToday = this.data.daily.date === today;
+
+    for (const [id, lp] of Object.entries(this.data.levels)) {
+      if (lp.bestScore < passScore) {
+        continue;
+      }
+      if (lp.status !== 'passed') {
+        lp.status = 'passed';
+        changed = true;
+      }
+      if (!lp.passedAt) {
+        lp.passedAt = lp.lastSubmitAt ?? new Date().toISOString();
+        changed = true;
+      }
+      if (dailyToday && this.data.daily.levelIds.includes(id) && !this.data.daily.done.includes(id)) {
+        this.data.daily.done.push(id);
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      await this.save();
+    }
+    return changed;
+  }
 }

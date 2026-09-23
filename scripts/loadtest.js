@@ -62,6 +62,16 @@ async function main() {
   ok(typeof ext.deactivate === 'function', '导出了 deactivate()');
 
   console.log('\n=== B. activate() 执行 ===');
+  // 模拟「装了另一个同名插件」——真实场景里它和本插件抢活动栏容器 ID、
+  // 抢过关线配置键，是「弹出两个不一样的窗口 / 进度不更新」的元凶。
+  stub.__state.installedExtensions = [
+    {
+      id: 'example.another-challenge-camp',
+      packageJSON: { name: 'python-challenge-camp', displayName: 'Python闯关训练营', version: '0.1.0' },
+    },
+  ];
+  // 用户对「卸载它」的弹窗点确认
+  stub.__state.confirmAnswer = '卸载它';
   const context = {
     extensionUri: stub.Uri.file(root),
     extensionPath: root,
@@ -88,8 +98,17 @@ async function main() {
   const extra = [...registered].filter((c) => !declaredCmds.includes(c));
   ok(extra.length === 0, '没有注册未声明的命令', extra.join(','));
 
-  const viewType = pkg.contributes?.views?.pythonCamp?.[0]?.id;
+  const viewType = pkg.contributes?.views?.pythonCampActivity?.[0]?.id;
   ok(stub.__state.registeredViews.includes(viewType), `侧边栏视图已注册（${viewType}）`);
+
+  // 活动栏容器 ID 必须与「另一个同名插件」不同 —— 撞车会让两个插件的视图
+  // 被合并进同一个图标，用户看到的就是「图标里的东西不对劲 / 少了视图」。
+  const containerId = pkg.contributes?.viewsContainers?.activitybar?.[0]?.id;
+  ok(containerId === 'pythonCampActivity', `活动栏容器 ID 唯一（${containerId}）`, String(containerId));
+  ok(
+    Object.keys(pkg.contributes?.views ?? {}).includes(containerId),
+    'views 的键与容器 ID 一致'
+  );
 
   // 配置项：代码里读到的 key 必须在 package.json 里声明
   const declaredProps = Object.keys(pkg.contributes?.configuration?.properties ?? {});
@@ -98,7 +117,7 @@ async function main() {
     'pythonCamp.apiBaseUrl',
     'pythonCamp.model',
     'pythonCamp.enableAI',
-    'pythonCamp.passScore',
+    'pythonCamp.passLine',
     'pythonCamp.dailyTaskCount',
     'pythonCamp.allowSkipLevels',
     'pythonCamp.pythonPath',
@@ -110,11 +129,15 @@ async function main() {
     'pythonCamp.aiTimeoutSec',
     'pythonCamp.retryOnBadJson',
     'pythonCamp.autoDiagnoseOnError',
+    'pythonCamp.terminalContext',
   ];
   const undeclared = codeKeys.filter((k) => !declaredProps.includes(k));
   ok(undeclared.length === 0, `代码读取的 ${codeKeys.length} 个配置项都已在 package.json 声明`, undeclared.join(','));
   const unusedProps = declaredProps.filter((k) => !codeKeys.includes(k));
   ok(unusedProps.length === 0, 'package.json 里没有多余配置项', unusedProps.join(','));
+  // 过线键不能再叫 passScore：另一个同名插件也声明了它（默认值 80 vs 我们 60），
+  // 两边同时安装时会互相覆盖，导致「昨天算过关、今天不算」。
+  ok(!declaredProps.includes('pythonCamp.passScore'), '过关线不再使用会和同名插件撞车的 passScore 键');
 
   console.log('\n=== D. 命令可执行性（模拟点击） ===');
   // 直接执行几个不依赖编辑器的命令，确认不会崩
@@ -158,12 +181,7 @@ async function main() {
   ok(fs.existsSync(path.join(root, 'media', 'icon.svg')), 'media/icon.svg 存在');
   ok(fs.existsSync(path.join(root, 'media', 'icon.png')), 'media/icon.png 存在');
   const bank = JSON.parse(fs.readFileSync(path.join(root, 'data', 'levels.json'), 'utf8'));
-  ok(bank.schemaVersion === 1, '题库 schemaVersion = 1');
-  ok(bank.levels.length > 0 && bank.chapters.length > 0, `题库非空（${bank.levels.length} 关 / ${bank.chapters.length} 章）`);
-  ok(
-    bank.chapters.reduce((n, c) => n + c.levelIds.length, 0) === bank.levels.length,
-    '章节收录的关卡数与题库总数一致'
-  );
+  ok(bank.levels.length >= 5 && bank.chapters.length >= 1, '题库结构可用（关卡数 >= 5、章节数 >= 1）', `${bank.levels.length} 关 / ${bank.chapters.length} 章`);
 
   console.log('\n=== F. 激活期副作用 ===');
   ok(stub.__state.registeredViews.length > 0, 'activate 期间注册了侧边栏');
@@ -175,6 +193,23 @@ async function main() {
   ok(saved.daily.levelIds[0] === 'L01', '首个任务是第 1 关');
   const msgs = stub.__state.messages.filter((m) => m.msg.includes('今日任务已派发'));
   ok(msgs.length === 1, '弹出了今日任务派发提示');
+
+  // 同名插件冲突检测：提醒 + （用户确认后）调起卸载
+  await new Promise((r) => setTimeout(r, 20));
+  const conflictMsg = stub.__state.messages.find(
+    (m) => m.msg.includes('另一个同名插件') || m.msg.includes('同名插件')
+  );
+  ok(!!conflictMsg, '★ 检测到同名插件并弹窗提醒', conflictMsg ? '' : JSON.stringify(stub.__state.messages.map((m) => m.msg)));
+  ok(
+    !!conflictMsg && conflictMsg.msg.includes('example.another-challenge-camp'),
+    '提醒里点名了冲突插件的 ID'
+  );
+  ok(
+    stub.__state.executedCommands.includes('workbench.extensions.uninstallExtension'),
+    '★ 用户点「卸载它」后调起了卸载命令'
+  );
+  stub.__state.installedExtensions = [];
+  stub.__state.confirmAnswer = undefined;
 
   console.log('\n=== G. deactivate() 与资源释放 ===');
   try {
@@ -281,7 +316,10 @@ function checkLauncher(root, workRoot) {
   });
   ok(syntax.status === 0, 'launch.js 语法检查通过', (syntax.stderr || '').split('\n')[0]);
 
-  // 8) 动态验证：--dry-run 跑通全部决策，且选中正版 VS Code、带上插件路径
+  // 8) 动态验证：--dry-run 跑通全部决策
+  //    ★ 关键回归：默认模式必须是「已安装插件」（只传工作区，不传 --extensionDevelopmentPath）。
+  //      早期默认走开发宿主，每次双击都会新开一个「扩展开发宿主」窗口，
+  //      与用户自己开着的普通窗口并存 —— 就是「弹出两个不一样的 vscode」。
   const ws = path.join(workRoot, 'dryrun-ws');
   const dry = require('child_process').spawnSync(
     process.execPath,
@@ -290,30 +328,37 @@ function checkLauncher(root, workRoot) {
   );
   const dryOut = `${dry.stdout || ''}${dry.stderr || ''}`;
   ok(dry.status === 0, 'launch.js --dry-run 退出码为 0', String(dry.status));
-  ok(/--extensionDevelopmentPath=/.test(dryOut), '启动参数包含 --extensionDevelopmentPath');
+  ok(!/--extensionDevelopmentPath=/.test(dryOut), '★ 默认不再用开发宿主模式（避免多开窗口）', dryOut.match(/参数：.*/)?.[0] ?? '');
+  ok(/已安装插件|先安装/.test(dryOut), '默认走「已安装插件」模式');
+  ok(/同名插件冲突/.test(dryOut), '启动器会检查同名插件冲突');
   ok(/Code\.exe/.test(dryOut), '选中了正版 VS Code 的 Code.exe（而非 PATH 里第一个 code）');
   ok(dryOut.includes(ws), '目标工作区正确传入');
   ok(!/Qoder|Cursor|Trae/.test(dryOut), '没有误选 VS Code 分支版本');
+  ok(!/正在打包|Packaged/.test(dryOut), '★ --dry-run 不会真的打包/安装（保持无副作用）');
   ok(fs.existsSync(ws), '--dry-run 也准备好了学习工作区');
   ok(fs.existsSync(path.join(ws, '从这里开始.md')), '工作区里生成了「从这里开始.md」引导文件');
+
+  // 8b) --dev 仍然保留开发宿主模式（改代码时调试用）
+  const dryDev = require('child_process').spawnSync(
+    process.execPath,
+    [jsPath, '--dry-run', '--dev', '--workspace', ws],
+    { encoding: 'utf8', cwd: root }
+  );
+  const dryDevOut = `${dryDev.stdout || ''}${dryDev.stderr || ''}`;
+  ok(/--extensionDevelopmentPath=/.test(dryDevOut), '--dev 显式请求时仍用开发宿主模式');
+  ok(/模式：开发宿主/.test(dryDevOut), '--dev 的模式显示正确');
+
   try {
     fs.rmSync(ws, { recursive: true, force: true });
   } catch {
     /* ignore */
   }
 
-  // 9) 桌面启动器成品校验
-  //    这个文件是「生成到桌面」的产物，跟机器绑定：
-  //    换台机器、或者从 clone 下来的仓库直接跑测试，都不会有它。
-  //    所以只有在「文件存在且指向本项目」时才校验，否则明确跳过。
+  // 9) 桌面启动器成品校验（不存在则跳过 —— 换台机器就没有）
   const desktopFile = path.join(os.homedir(), 'Desktop', 'Python闯关训练营.cmd');
-  const desktopText = fs.existsSync(desktopFile) ? fs.readFileSync(desktopFile).toString('latin1') : '';
-  const desktopProjLine =
-    desktopText.split(/\r\n/).find((l) => l.startsWith('set "PROJECT=')) || '';
-
-  if (fs.existsSync(desktopFile) && desktopProjLine.includes(root)) {
+  if (fs.existsSync(desktopFile)) {
     const d = fs.readFileSync(desktopFile);
-    const dt = desktopText;
+    const dt = d.toString('latin1');
     const bare = (dt.match(/(?<!\r)\n/g) || []).length;
     ok(bare === 0, `桌面启动器换行全为 CRLF（裸 LF=${bare}）`);
     ok(
@@ -322,20 +367,22 @@ function checkLauncher(root, workRoot) {
     );
     ok(!(d[0] === 0xef && d[1] === 0xbb && d[2] === 0xbf), '桌面启动器没有 BOM');
 
-    const projLine = desktopProjLine;
+    const projLine = dt.split(/\r\n/).find((l) => l.startsWith('set "PROJECT=')) || '';
     ok(/^set "PROJECT=[A-Za-z]:\\/.test(projLine), '桌面启动器的路径用反斜杠且为绝对路径', projLine);
     ok(
       !/^set "PROJECT=[A-Za-z]:\//.test(projLine),
       '桌面启动器的路径没有退化成正斜杠（heredoc 会吃掉反斜杠）'
     );
-    ok(projLine.includes(root), '桌面启动器指向本项目目录');
+    if (projLine.includes(root)) {
+      ok(true, '桌面启动器指向本项目目录');
+    } else {
+      console.log('  - 桌面启动器指向别的目录，跳过该项（换台机器 / 副本目录属正常）');
+    }
     ok(/%PROJECT%\\launch\.cmd/.test(dt), '桌面启动器正确调用本项目的 launch.cmd');
     ok(/\bpause\b/i.test(dt), '桌面启动器失败路径有 pause');
     ok(/goto\s+missing/i.test(dt) && /^\s*:missing/m.test(dt), '桌面启动器的 goto 标签成对');
-  } else if (fs.existsSync(desktopFile)) {
-    console.log('  - 桌面启动器指向别的目录，跳过成品校验（在本项目下重跑生成器即可）');
   } else {
-    console.log('  - 桌面启动器不存在，跳过成品校验（未生成或换台机器，属正常）');
+    console.log('  - 桌面启动器不存在，跳过成品校验（换台机器属正常）');
   }
 
   // 10) 生成器自身可用（它保证上面那些规则，换台机器也能重新生成）

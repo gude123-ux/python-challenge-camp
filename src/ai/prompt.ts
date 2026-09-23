@@ -22,6 +22,13 @@ export interface PromptContext {
   strictMode: boolean;
   /** 该学生历史上的薄弱标签，帮助模型给出针对性建议 */
   weakPoints: string[];
+  /**
+   * 学生在集成终端里执行过的命令与输出（已格式化）。
+   *
+   * 存在的意义：课程材料里不少练习是「在终端敲一条命令看输出」，
+   * 这类证据不可能出现在 .py 文件里。没有它，模型会误判成"练习未完成"而扣分。
+   */
+  terminal?: string | null;
 }
 
 const SYSTEM = `你是「Python 闯关训练营」的批改助教。
@@ -31,12 +38,27 @@ const SYSTEM = `你是「Python 闯关训练营」的批改助教。
 
 评分维度（满分 100）：
 - 可运行性 runnable：代码能否无报错运行。有语法错误或运行报错即为 false。
-- 正确性 correctness：是否真正完成了本关的练习，逻辑与结果是否正确。
+- 正确性 correctness：是否真正完成了本关的本关练习，逻辑与结果是否正确。
 - 代码质量 quality：可读性、命名、注释、是否用了本关教的方法（例如该用向量化却写 for 循环要扣分）。
 
 总分 score 的构成：正确性 50% + 代码质量 25% + 可运行性 25%。
 硬性约束：如果 runnable 为 false，score 不得超过 45 分。
 如果学生只是把示例代码原样复制、没有完成本关练习，correctness 不得超过 40 分。
+
+【证据的用法 —— 这一条直接决定分数公不公平，务必遵守】
+你会拿到两类证据：
+  ① 【本地运行结果】= 插件跑学生这个 .py 文件得到的真实退出码 / stdout / traceback；
+  ② 【学生在集成终端里执行过的命令与输出】= 学生自己敲的命令（可能是在终端里跑同一个文件，
+     也可能是 \`python -c "..."\` 这种一次性验证命令）。
+
+- 课程材料里有些练习要求「在终端执行一条命令观察结果」。这类练习的完成证据**只可能出现在 ②**。
+  只要 ② 里能看到学生确实执行过对应命令、且输出符合预期，就判为**已完成**，
+  绝对不要因为 .py 文件里没写这些命令而判未完成或扣分。
+- 反过来，如果 ② 里有某条命令的 traceback，那和 ① 里的报错同等有效，要算进可运行性判断。
+- **证据不足 ≠ 做错了**：如果两类证据都看不到某道练习的完成情况，不要直接判错、不要因此扣分。
+  此时 exerciseChecks 里把该条 done 设为 false，但 comment 必须写"证据不足，无法验证，请自己确认结果"，
+  并且把「怎么自己验证」写进 suggestions —— 而不是写进 issues。
+- 只有当你有明确反证时（代码逻辑与题目要求不符、结果明显不对、复现缺失、报错），才判该项未完成。
 
 评语要求：
 - 用中文，语气像一位认真的助教：直接指出问题，不空泛表扬。
@@ -57,7 +79,7 @@ const SYSTEM = `你是「Python 闯关训练营」的批改助教。
 
 function runSection(run: RunResult | null): string {
   if (!run) {
-    return '【本地运行结果】\n（未运行。请仅根据代码本身判断可运行性，并在 issues 里提醒学生先自己运行一次。）';
+    return '【本地运行结果】\n（未运行。请先看下面的终端记录有没有学生自己跑过的证据；都没有时，不要因此扣分，只在 issues 里提醒他先自己运行一次。）';
   }
   if (run.noInterpreter) {
     return '【本地运行结果】\n未找到 Python 解释器，无法运行。请不要因此扣分，只根据代码本身判断。';
@@ -94,13 +116,13 @@ function levelSection(level: Level): string {
   if (level.manualExample) {
     lines.push(
       '',
-      '【示例代码（本关要求学生复现的目标）】',
+      '【示例代码（本关要求学生复现的目标，可能因 PDF 排版有折行）】',
       '```python',
       level.manualExample,
       '```'
     );
   }
-  lines.push('', '【今日练习（学生必须完成的题目）】');
+  lines.push('', '【本关练习（学生必须完成的题目）】');
   level.exercises.forEach((e, i) => lines.push(`${i + 1}. ${e}`));
   if (level.accept) {
     lines.push('', `【验收标准】${level.accept}`);
@@ -109,7 +131,7 @@ function levelSection(level: Level): string {
 }
 
 export function buildMessages(ctx: PromptContext): Array<{ role: 'system' | 'user'; content: string }> {
-  const { level, code, run, strictMode, weakPoints } = ctx;
+  const { level, code, run, strictMode, weakPoints, terminal } = ctx;
 
   const strict = strictMode
     ? '\n【严格模式已开启】代码质量权重要更重：命名不规范、缺注释、可读性差要明显扣分。'
@@ -140,6 +162,9 @@ export function buildMessages(ctx: PromptContext): Array<{ role: 'system' | 'use
     '',
     runSection(run),
     '',
+    (terminal ?? '').trim() ||
+      '【学生在集成终端里执行过的命令与输出】\n（没有采集到相关记录。可能是学生没在终端里跑过，也可能是 VS Code 版本过低不支持采集 —— 所以「看不到」不等于「没做」，不要据此扣分。）',
+    '',
     '【学生提交的代码】',
     '```python',
     code,
@@ -164,7 +189,7 @@ export function buildMessages(ctx: PromptContext): Array<{ role: 'system' | 'use
  * 与批改不同：这里没有任何学生代码，目标是产出学生能自己对照学习的材料。
  * 输出是 Markdown 而不是 JSON —— 它要直接给学生看，不需要结构化。
  */
-const ANSWER_SYSTEM = `你是一位耐心但不说废话的 Python 助教，正在为一位初学者写「本关参考答案与讲解」。
+const ANSWER_SYSTEM = `你是一位耐心但不说废话的 Python 助教，正在为一位零基础学生写「本关参考答案与讲解」。
 
 输出要求（严格遵守）：
 - 全中文，Markdown 格式。
@@ -260,7 +285,12 @@ const ERROR_SYSTEM = `你是一位 Python 助教。学生刚写完的代码运�
 - **不要把整份代码重写一遍**，也不要顺手点评代码风格 —— 只讲这一个错误。
 - 语气直接、具体，不空泛安慰。`;
 
-function errorContext(level: Level, code: string, run: RunResult | null): string {
+function errorContext(
+  level: Level,
+  code: string,
+  run: RunResult | null,
+  terminal?: string | null
+): string {
   const lines = [
     `【关卡】第 ${level.day} 关 · ${level.title}`,
     `【今日目标】${level.goal || '（见知识点）'}`,
@@ -287,6 +317,14 @@ function errorContext(level: Level, code: string, run: RunResult | null): string
     (run?.stderr ?? '').trim() || '（无错误输出）',
     '```',
   ];
+  const term = (terminal ?? '').trim();
+  if (term) {
+    lines.push(
+      '',
+      term,
+      '（如果学生在终端里跑出来的 traceback 与上面不同，以终端里那条为准 —— 那是他自己真实看到的报错。）'
+    );
+  }
   return lines.join('\n');
 }
 
@@ -319,8 +357,13 @@ export function buildErrorMessages(ctx: {
   level: Level;
   code: string;
   run: RunResult | null;
+  terminal?: string | null;
 }): Array<{ role: 'system' | 'user'; content: string }> {
-  const user = [errorContext(ctx.level, ctx.code, ctx.run), '', ERROR_TEMPLATE].join('\n');
+  const user = [
+    errorContext(ctx.level, ctx.code, ctx.run, ctx.terminal),
+    '',
+    ERROR_TEMPLATE,
+  ].join('\n');
   return [
     { role: 'system', content: ERROR_SYSTEM },
     { role: 'user', content: user },
@@ -409,7 +452,7 @@ const ASK_SYSTEM = `你是一位 Python 助教，正在回答学生的提问。
 - 不确定的就说「我不确定」，不要编。
 - 不要复述他的问题，直接给答案。`;
 
-function askContext(level: Level, code: string): string {
+function askContext(level: Level, code: string, terminal?: string | null): string {
   const lines = [
     `【学生当前所在关卡】第 ${level.day} 关 · ${level.title}`,
     `【今日目标】${level.goal || '（见知识点）'}`,
@@ -421,6 +464,14 @@ function askContext(level: Level, code: string): string {
   } else {
     lines.push('', '【他目前写的代码】（还没开始写）');
   }
+  const term = (terminal ?? '').trim();
+  if (term) {
+    lines.push(
+      '',
+      term,
+      '（他可能在问终端里出现的现象 —— 回答时结合这些真实命令与输出，不要凭空猜。）'
+    );
+  }
   return lines.join('\n');
 }
 
@@ -429,9 +480,10 @@ export function buildAskMessages(ctx: {
   code: string;
   history: Array<{ role: 'user' | 'assistant'; content: string }>;
   question: string;
+  terminal?: string | null;
 }): Array<{ role: 'system' | 'user' | 'assistant'; content: string }> {
   const system = ctx.level
-    ? `${ASK_SYSTEM}\n\n${askContext(ctx.level, ctx.code)}`
+    ? `${ASK_SYSTEM}\n\n${askContext(ctx.level, ctx.code, ctx.terminal)}`
     : ASK_SYSTEM;
   return [
     { role: 'system', content: system },
