@@ -9,6 +9,7 @@ import type { AttemptRecord, GradeResult, Level, LevelStatus, RunResult } from '
 import { Curriculum } from '../core/curriculum';
 import { ProgressStore } from '../core/store';
 import { Scheduler } from '../core/scheduler';
+import type { PendingLevel } from '../core/pending';
 import { CampConfig, aiReady } from '../core/config';
 import { renderMarkdown } from './html';
 import { todayKey } from '../util/paths';
@@ -25,6 +26,10 @@ export interface LevelChip {
   tags: string[];
   inDaily: boolean;
   dailyDone: boolean;
+  /** 文件里已经写了代码，但一次都没提交过批改 */
+  pendingSubmit: boolean;
+  /** 待提交时：学生自己写的有效代码行数 */
+  pendingLines: number;
 }
 
 export interface ChapterGroup {
@@ -58,6 +63,13 @@ export interface SidebarModel {
   weakPoints: Array<{ tag: string; count: number }>;
   chapters: ChapterGroup[];
   wrong: LevelChip[];
+  /**
+   * 写了代码但一次都没提交批改的关卡。
+   *
+   * 学生最容易在这里产生「我明明做了，进度却没了」的错觉 ——
+   * 所以面板要主动把这件事说出来，并提供一键补交。
+   */
+  pending: Array<{ id: string; day: number; title: string; codeLines: number }>;
   ai: { enabled: boolean; ready: boolean; model: string; baseUrl: string; strict: boolean };
   passScore: number;
   bankInfo: { generatedAt: string; sources: string[] };
@@ -87,6 +99,8 @@ export interface LevelDetailModel {
   diagnosisHtml?: string;
   /** 最近一次运行是否失败 —— 决定要不要显示「分析报错」按钮 */
   runFailed: boolean;
+  /** 文件里有学生自己写的代码，但一次都没提交过批改（>0 时页面会提示补交） */
+  pendingLines?: number;
 }
 
 export class ViewModelBuilder {
@@ -96,9 +110,10 @@ export class ViewModelBuilder {
     private readonly scheduler: Scheduler
   ) {}
 
-  private chip(level: Level, cfg: CampConfig): LevelChip {
+  private chip(level: Level, cfg: CampConfig, pending?: Map<string, number>): LevelChip {
     const p = this.store.progress;
     const lp = p.levels[level.id];
+    const pendingLines = pending?.get(level.id) ?? 0;
     return {
       id: level.id,
       day: level.day,
@@ -111,17 +126,22 @@ export class ViewModelBuilder {
       tags: level.tags,
       inDaily: p.daily.levelIds.includes(level.id),
       dailyDone: p.daily.done.includes(level.id),
+      pendingSubmit: pendingLines > 0,
+      pendingLines,
     };
   }
 
-  buildSidebar(cfg: CampConfig): SidebarModel {
+  buildSidebar(cfg: CampConfig, pending: PendingLevel[] = []): SidebarModel {
     const p = this.store.progress;
     const today = todayKey();
     const stats = this.curriculum.stats(p, cfg.passScore, cfg.allowSkipLevels);
     const frontierLevel = this.curriculum.frontier(p, cfg.passScore);
+    const pendingMap = new Map(pending.map((x) => [x.levelId, x.codeLines]));
 
     const chapters: ChapterGroup[] = this.curriculum.chapters.map((ch) => {
-      const levels = this.curriculum.levelsOfChapter(ch.id).map((l) => this.chip(l, cfg));
+      const levels = this.curriculum
+        .levelsOfChapter(ch.id)
+        .map((l) => this.chip(l, cfg, pendingMap));
       return {
         id: ch.id,
         title: ch.title,
@@ -133,7 +153,7 @@ export class ViewModelBuilder {
       };
     });
 
-    const todayLevels = this.scheduler.todayLevels().map((l) => this.chip(l, cfg));
+    const todayLevels = this.scheduler.todayLevels().map((l) => this.chip(l, cfg, pendingMap));
 
     return {
       student: { ...p.student },
@@ -144,7 +164,7 @@ export class ViewModelBuilder {
         total: p.daily.levelIds.length,
         levels: todayLevels,
       },
-      frontier: frontierLevel ? this.chip(frontierLevel, cfg) : null,
+      frontier: frontierLevel ? this.chip(frontierLevel, cfg, pendingMap) : null,
       stats: {
         total: stats.total,
         passed: stats.passed,
@@ -159,7 +179,16 @@ export class ViewModelBuilder {
       recentDays: this.store.recentDays(14),
       weakPoints: this.store.weakRanking(8),
       chapters,
-      wrong: this.curriculum.wrongLevels(p, cfg.passScore).slice(0, 20).map((l) => this.chip(l, cfg)),
+      wrong: this.curriculum
+        .wrongLevels(p, cfg.passScore)
+        .slice(0, 20)
+        .map((l) => this.chip(l, cfg, pendingMap)),
+      pending: pending.map((x) => ({
+        id: x.levelId,
+        day: x.day,
+        title: this.curriculum.get(x.levelId)?.title ?? '',
+        codeLines: x.codeLines,
+      })),
       ai: {
         enabled: cfg.enableAI,
         ready: aiReady(cfg),

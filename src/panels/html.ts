@@ -79,6 +79,8 @@ button.tiny { padding: 2px 7px; font-size: 11px; }
 .badge.pass   { background: rgba(60,170,110,.22); color: var(--vscode-charts-green, #3caa6e); }
 .badge.warn   { background: rgba(220,150,40,.22); color: var(--vscode-charts-orange, #d99628); }
 .badge.fail   { background: rgba(220,80,80,.20); color: var(--vscode-charts-red, #dc5050); }
+/* 「写了代码但没提交」—— 用醒目的橙黄，和「可挑战」区分开 */
+.badge.todo   { background: rgba(220,150,40,.26); color: var(--vscode-charts-orange, #d99628); font-weight: 600; }
 
 .stars { color: var(--vscode-charts-orange, #d99628); letter-spacing: -1px; }
 

@@ -36,6 +36,7 @@ import {
   isPythonRelated,
 } from '../src/core/terminal';
 import type { TerminalEntry } from '../src/core/terminal';
+import { countStudentCodeLines, scanPendingSubmissions } from '../src/core/pending';
 import { runFile, runSnippet, checkSyntax } from '../src/core/runner';
 import { todayKey } from '../src/util/paths';
 import type { GradeResult, Level, RunResult } from '../src/core/types';
@@ -601,6 +602,95 @@ async function main(): Promise<void> {
   ok(rec.context() === '', '降级状态下终端上下文为空串');
   ok(rec.evidenceFor(level).ran === false, '降级状态下不会伪造运行证据');
   rec.dispose();
+
+  // ---------------------------------------------------------- 11. 写了但没提交
+  // 背景（用户实测）：学生写了代码但忘了点「提交并批改」，
+  // 面板上还是「可挑战」，他就觉得「我明明做了，进度却没了」。
+  section('11. 「写了代码但没提交」的检测');
+
+  ok(countStudentCodeLines('# 全是注释\n\n# 模板说明\n') === 0, '模板（全是注释）算 0 行有效代码');
+  ok(countStudentCodeLines('a = 1\n\nprint(a)\n# 注释\n') === 2, '剥掉注释与空行后计数正确');
+  ok(countStudentCodeLines('') === 0, '空内容算 0 行');
+
+  const fakeIo = (files: Record<string, string>) => ({
+    readdir: async () => Object.keys(files),
+    stat: async () => ({ mtimeMs: Date.now() }),
+    readFile: async (p: string) => {
+      const name = path.basename(p);
+      if (!(name in files)) {
+        throw new Error('ENOENT');
+      }
+      return files[name];
+    },
+  });
+
+  const probeProgress = {
+    schemaVersion: 1,
+    student: { name: '', cohort: '' },
+    createdAt: '',
+    updatedAt: '',
+    daily: { date: '', levelIds: [], done: [] },
+    levels: {
+      L01: {
+        levelId: 'L01',
+        status: 'passed',
+        bestScore: 88,
+        lastScore: 88,
+        attempts: 1,
+        history: [],
+        weakTags: [],
+      },
+    },
+    stats: { totalStudyMs: 0, dailyMs: {}, activeDays: [], streak: { current: 0, best: 0, lastDate: '' } },
+    weakPoints: {},
+    meta: {},
+  } as any;
+
+  const probeFiles = {
+    '第01关_x.py': 'b = 2\nprint(b)\n', // 已提交过 → 不该再提示
+    '第02关_x.py': 'a = 1\nprint(a)\n', // 写了没提交 → 应被挑出
+    '第03关_x.py': '# 只有模板注释\n#\n', // 还没动手 → 不算
+    '第99关_不存在.py': 'x = 1\ny = 2\n', // 题库里没有第 99 关
+    'notes.txt': 'whatever',
+  };
+  const pend = await scanPendingSubmissions(curriculum.all, '/tmp/whatever', probeProgress, fakeIo(probeFiles));
+  ok(
+    pend.length === 1 && pend[0].levelId === 'L02',
+    '只挑出「写了代码且从未提交」的关卡',
+    JSON.stringify(pend.map((p) => p.levelId))
+  );
+  ok(pend[0]?.codeLines === 2, '带上有效代码行数（面板要显示「已写 N 行」）', String(pend[0]?.codeLines));
+  ok(!!pend[0]?.mtime, '带上文件修改时间');
+
+  const pendEmpty = await scanPendingSubmissions(curriculum.all, '/tmp/does-not-exist', probeProgress, {
+    readdir: async () => {
+      throw new Error('ENOENT');
+    },
+    stat: async () => ({ mtimeMs: 0 }),
+    readFile: async () => '',
+  });
+  ok(pendEmpty.length === 0, '目录不存在时返回空数组（不抛异常）');
+
+  const pendUnreadable = await scanPendingSubmissions(
+    curriculum.all,
+    '/tmp/x',
+    probeProgress,
+    {
+      readdir: async () => ['第02关_x.py', '第04关_y.py'],
+      stat: async () => ({ mtimeMs: 0 }),
+      readFile: async (p: string) => {
+        if (p.includes('第02关')) {
+          throw new Error('EACCES');
+        }
+        return 'c = 3\nprint(c)\n';
+      },
+    }
+  );
+  ok(
+    pendUnreadable.length === 1 && pendUnreadable[0].levelId === 'L04',
+    '单个文件读不到时跳过它，不影响其它关卡',
+    JSON.stringify(pendUnreadable.map((p) => p.levelId))
+  );
 
   // ---------------------------------------------------------- 收尾
   // 清理临时工作区，别在 TEMP 里堆垃圾

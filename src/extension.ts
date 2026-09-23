@@ -20,6 +20,8 @@ import { Scheduler } from './core/scheduler';
 import { StudyTimer } from './core/timer';
 import { runFile } from './core/runner';
 import { TerminalRecorder } from './core/terminal';
+import { scanPendingSubmissions } from './core/pending';
+import type { PendingLevel } from './core/pending';
 import { gradeCode, promptAiSetup, extractJson } from './core/grader';
 import {
   generateLevelAnswer,
@@ -48,6 +50,7 @@ import {
   answerDir,
   solutionsFilePath,
   stateDir,
+  workDir,
 } from './util/paths';
 
 let store: ProgressStore;
@@ -57,6 +60,8 @@ let timer: StudyTimer;
 let vmb: ViewModelBuilder;
 let sidebar: SidebarProvider;
 let statusBar: vscode.StatusBarItem;
+/** 扩展上下文（异步扫描等辅助函数要用） */
+let extContext: vscode.ExtensionContext;
 /** 集成终端记录（把学生自己敲的 python 命令与输出作为批改证据） */
 let terminalRecorder: TerminalRecorder;
 /** AI 诊断日志（测试连接、调用失败时的详细信息） */
@@ -75,10 +80,18 @@ let currentLevelId: string | undefined;
 /** 最近一次批改结果（用于详情页展示） */
 let lastGrade: GradeResult | null = null;
 let lastRun: RunResult | null = null;
+/**
+ * 「写了代码但没提交批改」的关卡（缓存）。
+ *
+ * 侧边栏的模型构建是同步的，而扫描文件是异步的 —— 所以扫描结果先落到这里，
+ * 由 buildSidebar 同步读取。扫描在激活、进度变化、保存文件时触发。
+ */
+let pendingLevels: PendingLevel[] = [];
 
 const LEVEL_FILE_RE = /第(\d+)关/;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  extContext = context;
   store = new ProgressStore(context);
   curriculum = new Curriculum();
   curriculum.load(context.extensionUri);
@@ -132,7 +145,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   sidebar = new SidebarProvider(
     context.extensionUri,
     (msg) => handleWebviewMessage(msg, context),
-    () => vmb.buildSidebar(readConfig()),
+    () => vmb.buildSidebar(readConfig(), pendingLevels),
     (visible) => {
       timer.panelVisible = visible;
     }
@@ -162,8 +175,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     store.onDidChange(() => {
       sidebar.refresh();
       refreshStatusBar();
+      void refreshPending();
     })
   );
+
+  // 保存关卡代码时重扫「写了但没提交」，让面板上的提示实时跟上
+  context.subscriptions.push(
+    vscode.workspace.onDidSaveTextDocument((doc) => {
+      if (doc.uri.fsPath.endsWith('.py') && isUnderWorkDir(doc.uri.fsPath)) {
+        void refreshPending();
+      }
+    })
+  );
+
+  // 首次扫描（放在侧边栏创建之后，才能把结果推给面板）
+  void refreshPending();
 
   // 跨零点自动派发新一天的今日任务（VS Code 长期开着也不会停在昨天的任务上）
   const dayWatch = setInterval(() => {
@@ -176,7 +202,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       });
       if (changed) {
         sidebar.refresh();
-        void vscode.window.showInformationMessage('新的一天，今日任务已重新派发。');
+        const st2 = curriculum.stats(store.progress, c.passScore, c.allowSkipLevels);
+        void vscode.window.showInformationMessage(
+          `新的一天，今日任务已重新派发（累计已过关 ${st2.passed}/${st2.total} 关，成绩不会清零）。`
+        );
       }
     })();
   }, 5 * 60 * 1000);
@@ -207,9 +236,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   if (assigned) {
     const t = scheduler.todayProgress();
+    const st = curriculum.stats(store.progress, cfg.passScore, cfg.allowSkipLevels);
+    // 明确说清「今日任务重派 ≠ 进度清零」—— 这是学生最容易误解的一点
     void vscode.window
       .showInformationMessage(
-        `今日任务已派发：${t.total} 关。`,
+        `今日任务已派发：${t.total} 关（从第 ${
+          scheduler.todayLevels()[0]?.day ?? 1
+        } 关开始）。今日完成数每天归零，但累计已过关 ${st.passed}/${st.total} 关的成绩会永久保留。`,
         '开始今日任务',
         '打开进度面板'
       )
@@ -381,6 +414,10 @@ function registerCommands(context: vscode.ExtensionContext): void {
     void vscode.window.showInformationMessage('今日任务已重置。');
   });
 
+  reg('pythonCamp.submitPending', async () => {
+    await submitPendingLevels(context);
+  });
+
   reg('pythonCamp.exportReport', async () => {
     await exportReport(context);
   });
@@ -499,6 +536,10 @@ function showLevelPanel(level: Level, context: vscode.ExtensionContext, reveal =
     lastDiagnosis && lastDiagnosis.levelId === level.id ? lastDiagnosis.markdown : null;
   const model = vmb.buildLevelDetail(level, cfg, exists, lastGrade, lastRun, diagnosis);
   model.filePath = uri.fsPath;
+  const pending = pendingLevels.find((x) => x.levelId === level.id);
+  if (pending) {
+    model.pendingLines = pending.codeLines;
+  }
   panel.setModel(model);
   if (reveal) {
     panel.reveal();
@@ -605,11 +646,74 @@ async function runLevel(
   );
 }
 
+// ---------------------------------------------------------- 「写了但没提交」的检测
+
+/** 某个路径是否落在学习工作区的代码目录里 */
+function isUnderWorkDir(file: string): boolean {
+  if (!extContext) {
+    return false;
+  }
+  return file.startsWith(workDir(extContext));
+}
+
+/**
+ * 重新扫描「写了代码但没提交批改」的关卡。
+ *
+ * 为什么要有这个：学生常常写完了代码却忘了点「提交并批改」，
+ * 面板上看到的还是「可挑战 / 未过关」，于是觉得「我明明做了，进度却没了」。
+ * 扫描结果变了就刷新面板。
+ */
+async function refreshPending(): Promise<void> {
+  if (!extContext || !curriculum || !store) {
+    return;
+  }
+  try {
+    const next = await scanPendingSubmissions(curriculum.all, workDir(extContext), store.progress);
+    const before = pendingLevels.map((x) => `${x.levelId}:${x.codeLines}`).join(',');
+    const after = next.map((x) => `${x.levelId}:${x.codeLines}`).join(',');
+    pendingLevels = next;
+    if (before !== after) {
+      sidebar?.refresh();
+    }
+  } catch {
+    // 扫描失败不该影响主流程（面板少一条提示而已）
+  }
+}
+
+/** 把「写了代码但没提交」的关卡依次补交批改 */
+async function submitPendingLevels(context: vscode.ExtensionContext): Promise<void> {
+  const targets = pendingLevels
+    .map((x) => curriculum.get(x.levelId))
+    .filter((l): l is Level => !!l);
+  if (!targets.length) {
+    void vscode.window.showInformationMessage('没有「写了代码但还没提交」的关卡。');
+    return;
+  }
+  const list = targets.map((l) => `第 ${l.day} 关`).join('、');
+  const pick = await vscode.window.showWarningMessage(
+    `这 ${targets.length} 关的文件里有你写的代码，但一次都没提交过批改：${list}。现在依次提交吗？`,
+    { modal: true },
+    '开始补交'
+  );
+  if (pick !== '开始补交') {
+    return;
+  }
+  for (const level of targets) {
+    currentLevelId = level.id;
+    // quiet：批量模式下不弹「进入下一关」那种需要点确认的对话框，否则会卡住
+    await submitLevel(level, context, undefined, true);
+  }
+  await refreshPending();
+  sidebar.refresh();
+}
+
 /** 提交并批改某一关的代码 */
 async function submitLevel(
   level: Level,
   context: vscode.ExtensionContext,
-  document?: vscode.TextDocument
+  document?: vscode.TextDocument,
+  /** 批量补交时为 true：不弹需要用户点确认的对话框 */
+  quiet = false
 ): Promise<void> {
   const cfg = readConfig();
   const uri = document?.uri ?? levelFileUri(context, level);
@@ -686,6 +790,12 @@ async function submitLevel(
           ],
         };
         showLevelPanel(level, context);
+        if (quiet) {
+          void vscode.window.showWarningMessage(
+            `第 ${level.day} 关：AI 批改未完成（${reason}）。本次不记成绩。`
+          );
+          return;
+        }
         const pick = await vscode.window.showWarningMessage(
           `第 ${level.day} 关：AI 批改未完成（${reason}）。本次不记成绩。`,
           '重试 AI 批改',
@@ -761,7 +871,10 @@ async function submitLevel(
       refreshStatusBar();
 
       const msg = `第 ${level.day} 关：${result.score} 分${passed ? '，已过关！' : `（过关线 ${cfg.passScore} 分）`}`;
-      if (passed) {
+      if (quiet) {
+        // 批量补交：不弹需要点确认的对话框，否则会卡在第一个关卡上
+        void vscode.window.showInformationMessage(msg);
+      } else if (passed) {
         const next = curriculum.nextOf(level.id);
         const pick = await vscode.window.showInformationMessage(
           msg,
@@ -1451,6 +1564,9 @@ async function handleWebviewMessage(
       }
       break;
     }
+    case 'submitPending':
+      await submitPendingLevels(context);
+      break;
     case 'runLevel': {
       const lv = curriculum.get(msg.levelId);
       if (lv) {

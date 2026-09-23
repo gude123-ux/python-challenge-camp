@@ -126,6 +126,15 @@ function render() {
 
   if (L.goal) h += '<div class="card"><b>今日目标</b><div style="margin-top:4px">' + esc(L.goal) + '</div></div>';
 
+  // 文件里已经有自己写的代码、但一次都没提交过 —— 明确说出来，
+  // 免得学生以为「我做了但插件不认」。
+  if (S.pendingLines) {
+    h += '<div class="card" style="border-left:3px solid var(--vscode-charts-orange,#d99628)">' +
+      '<b>这一关你写了 ' + S.pendingLines + ' 行代码，但还没提交过批改</b>' +
+      '<div class="muted" style="font-size:11px;margin-top:4px">所以进度里还没有它的成绩。' +
+      '点下面的「提交并批改」补上即可 —— 已有的代码不会被改动。</div></div>';
+  }
+
   h += '<div class="actions">' +
     '<button class="primary" data-act="openFile">' + (S.fileExists ? '打开代码文件' : '创建代码文件并开始') + '</button>' +
     '<button data-act="run">本地运行</button>' +

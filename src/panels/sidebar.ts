@@ -72,6 +72,9 @@ function badge(c) {
   if (c.status === 'passed') return '<span class="badge pass">已过关 ' + c.bestScore + ' 分</span>';
   if (c.status === 'locked') return '<span class="badge locked">未解锁</span>';
   if (c.attempts > 0) return '<span class="badge fail">未过关 ' + c.bestScore + ' 分</span>';
+  // 写了代码但一次都没提交过 —— 必须和「还没动手」区分开，
+  // 否则学生看到「可挑战」会以为自己的进度丢了。
+  if (c.pendingSubmit) return '<span class="badge todo">待提交</span>';
   return '<span class="badge open">可挑战</span>';
 }
 
@@ -115,6 +118,13 @@ function renderToday() {
       Math.round(M.stats.remainingMinutes / 60) + ' 小时内容</div>' +
     '</div>';
 
+  // ★ 这一段是为了消除「进度被清零了」的误解：
+  //   今日任务每天 0 点重派、今日完成数会归零，但累计成绩永久保留。
+  html += '<div class="hint"><b>今日任务每天 0 点重新派发</b>（这里是<b>今天</b>的清单，不是累计成绩）。' +
+    '累计已过关 <b>' + M.stats.passed + ' / ' + M.stats.total + '</b> 关，永久保留 —— 见「关卡地图」与「数据面板」。' +
+    (M.stats.passed > 0 ? '' : '') +
+    '</div>';
+
   if (!t.levels.length) {
     html += '<div class="empty">今天还没有任务。<br>点下面的「开始今日任务」派发。</div>';
   } else {
@@ -133,6 +143,25 @@ function renderToday() {
           '<button class="tiny" data-act="askLevel" data-id="' + c.id + '">问 AI</button>' +
         '</div></div>';
     });
+    html += '</div>';
+  }
+
+  // ★ 写了代码但没提交 —— 学生最容易在这里觉得「进度丢了」
+  if (M.pending && M.pending.length) {
+    html += '<div class="section-title">写了代码，还没提交 <span class="count">' + M.pending.length + '</span></div>';
+    html += '<div class="card">';
+    html += '<div class="hint" style="margin-top:0">这些关卡的文件里已经有你自己写的代码，' +
+      '但<b>一次都没提交过批改</b>，所以插件里还没有它们的成绩。点「提交批改」补上即可。</div>';
+    M.pending.forEach(function (x) {
+      html += '<div class="item"><div class="hd"><div><div class="t">第 ' + x.day + ' 关 · ' + esc(x.title) + '</div>' +
+        '<div class="sub">' + esc(x.id) + ' · 已写 ' + x.codeLines + ' 行代码</div></div></div>' +
+        '<div class="btns">' +
+          '<button class="primary tiny" data-act="submitLevel" data-id="' + x.id + '">提交批改</button>' +
+          '<button class="tiny" data-act="openLevel" data-id="' + x.id + '">打开文件</button>' +
+        '</div></div>';
+    });
+    html += '<div class="btns" style="margin-top:8px">' +
+      '<button class="tiny" data-act="submitPending">全部补交（' + M.pending.length + ' 关）</button></div>';
     html += '</div>';
   }
 
