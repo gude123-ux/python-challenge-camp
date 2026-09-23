@@ -1,287 +1,503 @@
 {
-  "schemaVersion": 1,
-  "generatedAt": "2026-09-22T04:20:14",
-  "generator": "sample (hand-written placeholder content)",
-  "sourceDocs": [
+ "schemaVersion": 1,
+ "generatedAt": "2026-09-22T04:20:14",
+ "generator": "sample (hand-written placeholder content)",
+ "sourceDocs": [
+  {
+   "file": "（无外部来源）",
+   "role": "示例题库：内容为本仓库手写的通用 Python 练习，仅用于演示框架。请替换为自己的课程内容。"
+  }
+ ],
+ "chapters": [
+  {
+   "id": 1,
+   "title": "Python 基础语法",
+   "levelIds": [
+    "L01",
+    "L02",
+    "L03",
+    "L04"
+   ],
+   "difficulty": 1,
+   "totalMinutes": 300
+  },
+  {
+   "id": 2,
+   "title": "函数与常用库",
+   "levelIds": [
+    "L05",
+    "L06",
+    "L07",
+    "L08"
+   ],
+   "difficulty": 2,
+   "totalMinutes": 390
+  }
+ ],
+ "levels": [
+  {
+   "id": "L01",
+   "day": 1,
+   "chapter": 1,
+   "chapterTitle": "Python 基础语法",
+   "title": "变量与基本类型",
+   "difficulty": 1,
+   "estimatedMinutes": 60,
+   "goal": "理解变量是「名字指向值」，分清 int / float / str / bool 四种基本类型",
+   "knowledge": [
+    "变量不是盒子，而是贴在值上的标签。a = 1 的意思是「让 a 这个名字指向 1」。",
+    "四种最常用的类型：int（整数）、float（小数）、str（字符串）、bool（True/False）。",
+    "type(x) 用来查看一个值的类型；print 负责把结果输出到屏幕。",
+    "字符串和数字不能直接相加，需要先转换类型，例如 int(\"3\") + 1。"
+   ],
+   "exercises": [
+    "定义三个变量分别保存你的年龄、身高（米）、姓名，并打印出它们的类型；",
+    "把字符串 \"42\" 转成整数再乘以 2，打印结果；",
+    "用一个 print 同时输出上面三个变量（用逗号分隔即可）。"
+   ],
+   "accept": "脚本能无报错运行，并打印出三个变量及其类型。",
+   "transfer": "任何数据处理的第一步都是「确认拿到的是什么类型」——类型错了，后面所有计算都会跟着错。",
+   "manualExample": "name = \"Alice\"\nage = 20\nheight = 1.68\n\nprint(name, type(name))\nprint(age + 1)\nprint(int(\"42\") * 2)",
+   "starterCode": "# 第 1 关：变量与基本类型\n# 今日目标：理解变量是「名字指向值」，分清 int / float / str / bool 四种基本类型\n#\n# ==========================================================\n# 示例代码 —— 照着复现一遍，跑通、看懂每一行\n# ==========================================================\n# name = \"Alice\"\n# age = 20\n# height = 1.68\n#\n# print(name, type(name))\n# print(age + 1)\n# print(int(\"42\") * 2)\n#\n# ==========================================================\n# 本关练习\n# ==========================================================\n#   1. 定义三个变量分别保存你的年龄、身高（米）、姓名，并打印出它们的类型；\n#   2. 把字符串 \"42\" 转成整数再乘以 2，打印结果；\n#   3. 用一个 print 同时输出上面三个变量（用逗号分隔即可）。\n#\n# 写完后按 Ctrl+Shift+P 运行「Python闯关训练营: 提交并批改当前文件」\n",
+   "tags": [
+    "变量",
+    "类型",
+    "print"
+   ],
+   "source": "示例题库 · 第 1 关（占位内容，请替换为自己的课程）",
+   "lesson": [
     {
-      "file": "（无外部来源）",
-      "role": "示例题库：内容为本仓库手写的通用 Python 练习，仅用于演示框架。请替换为自己的课程内容。"
+     "heading": "",
+     "text": "变量不是盒子，而是贴在值上的标签。a = 1 的意思是「让 a 这个名字指向 1」。",
+     "code": ""
+    },
+    {
+     "heading": "",
+     "text": "四种最常用的类型：int（整数）、float（小数）、str（字符串）、bool（True/False）。",
+     "code": ""
+    },
+    {
+     "heading": "",
+     "text": "type(x) 用来查看一个值的类型；print 负责把结果输出到屏幕。",
+     "code": ""
+    },
+    {
+     "heading": "",
+     "text": "字符串和数字不能直接相加，需要先转换类型，例如 int(\"3\") + 1。",
+     "code": ""
+    },
+    {
+     "heading": "示例代码",
+     "text": "把这段代码敲一遍并跑通，再去做下面的练习。",
+     "code": "name = \"Alice\"\nage = 20\nheight = 1.68\n\nprint(name, type(name))\nprint(age + 1)\nprint(int(\"42\") * 2)"
     }
-  ],
-  "chapters": [
+   ]
+  },
+  {
+   "id": "L02",
+   "day": 2,
+   "chapter": 1,
+   "chapterTitle": "Python 基础语法",
+   "title": "字符串与 f-string",
+   "difficulty": 1,
+   "estimatedMinutes": 60,
+   "goal": "掌握字符串的拼接、切片与 f-string 格式化输出",
+   "knowledge": [
+    "字符串可以用 + 拼接，用 * 重复，例如 \"-\" * 10 得到一条分隔线。",
+    "下标从 0 开始；s[0] 是第一个字符，s[-1] 是最后一个字符。",
+    "切片 s[a:b] 取的是「左闭右开」区间，不包含 b 位置。",
+    "f-string（f\"...\"）可以直接在花括号里嵌入变量或表达式，是最好用的格式化方式。"
+   ],
+   "exercises": [
+    "给定 s = \"python\"，分别打印它的首字符、末字符、前三个字符和反转结果；",
+    "用 f-string 打印一行「姓名：X，年龄：Y 岁」，X 和 Y 用变量代入；",
+    "打印一条长度为 20 的分隔线。"
+   ],
+   "accept": "切片结果正确，f-string 输出中变量已被正确替换。",
+   "transfer": "文本清洗、日志拼接、报告生成都建立在字符串操作之上，f-string 是日常使用频率最高的写法。",
+   "manualExample": "s = \"python\"\nprint(s[0])\nprint(s[-1])\nprint(s[:3])\nprint(s[::-1])\n\nname = \"Alice\"\nage = 20\nprint(f\"姓名：{name}，年龄：{age} 岁\")\nprint(\"-\" * 20)",
+   "starterCode": "# 第 2 关：字符串与 f-string\n# 今日目标：掌握字符串的拼接、切片与 f-string 格式化输出\n#\n# ==========================================================\n# 示例代码 —— 照着复现一遍，跑通、看懂每一行\n# ==========================================================\n# s = \"python\"\n# print(s[0])\n# print(s[-1])\n# print(s[:3])\n# print(s[::-1])\n#\n# name = \"Alice\"\n# age = 20\n# print(f\"姓名：{name}，年龄：{age} 岁\")\n# print(\"-\" * 20)\n#\n# ==========================================================\n# 本关练习\n# ==========================================================\n#   1. 给定 s = \"python\"，分别打印它的首字符、末字符、前三个字符和反转结果；\n#   2. 用 f-string 打印一行「姓名：X，年龄：Y 岁」，X 和 Y 用变量代入；\n#   3. 打印一条长度为 20 的分隔线。\n#\n# 写完后按 Ctrl+Shift+P 运行「Python闯关训练营: 提交并批改当前文件」\n",
+   "tags": [
+    "字符串",
+    "切片",
+    "f-string"
+   ],
+   "source": "示例题库 · 第 2 关（占位内容，请替换为自己的课程）",
+   "lesson": [
     {
-      "id": 1,
-      "title": "Python 基础语法",
-      "levelIds": [
-        "L01",
-        "L02",
-        "L03",
-        "L04"
-      ],
-      "difficulty": 1,
-      "totalMinutes": 300
+     "heading": "",
+     "text": "字符串可以用 + 拼接，用 * 重复，例如 \"-\" * 10 得到一条分隔线。",
+     "code": ""
     },
     {
-      "id": 2,
-      "title": "函数与常用库",
-      "levelIds": [
-        "L05",
-        "L06",
-        "L07",
-        "L08"
-      ],
-      "difficulty": 2,
-      "totalMinutes": 390
+     "heading": "",
+     "text": "下标从 0 开始；s[0] 是第一个字符，s[-1] 是最后一个字符。",
+     "code": ""
+    },
+    {
+     "heading": "",
+     "text": "切片 s[a:b] 取的是「左闭右开」区间，不包含 b 位置。",
+     "code": ""
+    },
+    {
+     "heading": "",
+     "text": "f-string（f\"...\"）可以直接在花括号里嵌入变量或表达式，是最好用的格式化方式。",
+     "code": ""
+    },
+    {
+     "heading": "示例代码",
+     "text": "把这段代码敲一遍并跑通，再去做下面的练习。",
+     "code": "s = \"python\"\nprint(s[0])\nprint(s[-1])\nprint(s[:3])\nprint(s[::-1])\n\nname = \"Alice\"\nage = 20\nprint(f\"姓名：{name}，年龄：{age} 岁\")\nprint(\"-\" * 20)"
     }
-  ],
-  "levels": [
+   ]
+  },
+  {
+   "id": "L03",
+   "day": 3,
+   "chapter": 1,
+   "chapterTitle": "Python 基础语法",
+   "title": "列表与切片",
+   "difficulty": 2,
+   "estimatedMinutes": 90,
+   "goal": "会用列表存放一组数据，掌握增删改查与常用聚合函数",
+   "knowledge": [
+    "列表用方括号定义，元素可以不同类型，例如 xs = [1, 2, 3]。",
+    "append 在末尾追加，insert 在指定位置插入，pop 取出并删除。",
+    "len 取长度，sum 求和，max/min 取极值。",
+    "列表切片和字符串一样是左闭右开，并且会返回一个新列表。"
+   ],
+   "exercises": [
+    "建一个包含 5 个数字的列表，打印它的长度、总和与最大值；",
+    "在列表末尾追加一个数，再删掉第一个元素，打印结果；",
+    "用切片取出列表中间三个元素。"
+   ],
+   "accept": "列表的增删改查结果正确，切片取出的元素个数符合预期。",
+   "transfer": "列表是最基础的数据容器，读表格、读日志、读传感器数据，第一步都是拿到一个列表。",
+   "manualExample": "xs = [3, 1, 4, 1, 5]\nprint(len(xs), sum(xs), max(xs))\n\nxs.append(9)\nprint(xs)\n\ndel xs[0]\nprint(xs)\nprint(xs[1:4])",
+   "starterCode": "# 第 3 关：列表与切片\n# 今日目标：会用列表存放一组数据，掌握增删改查与常用聚合函数\n#\n# ==========================================================\n# 示例代码 —— 照着复现一遍，跑通、看懂每一行\n# ==========================================================\n# xs = [3, 1, 4, 1, 5]\n# print(len(xs), sum(xs), max(xs))\n#\n# xs.append(9)\n# print(xs)\n#\n# del xs[0]\n# print(xs)\n# print(xs[1:4])\n#\n# ==========================================================\n# 本关练习\n# ==========================================================\n#   1. 建一个包含 5 个数字的列表，打印它的长度、总和与最大值；\n#   2. 在列表末尾追加一个数，再删掉第一个元素，打印结果；\n#   3. 用切片取出列表中间三个元素。\n#\n# 写完后按 Ctrl+Shift+P 运行「Python闯关训练营: 提交并批改当前文件」\n",
+   "tags": [
+    "列表",
+    "切片",
+    "len"
+   ],
+   "source": "示例题库 · 第 3 关（占位内容，请替换为自己的课程）",
+   "lesson": [
     {
-      "id": "L01",
-      "day": 1,
-      "chapter": 1,
-      "chapterTitle": "Python 基础语法",
-      "title": "变量与基本类型",
-      "difficulty": 1,
-      "estimatedMinutes": 60,
-      "goal": "理解变量是「名字指向值」，分清 int / float / str / bool 四种基本类型",
-      "knowledge": [
-        "变量不是盒子，而是贴在值上的标签。a = 1 的意思是「让 a 这个名字指向 1」。",
-        "四种最常用的类型：int（整数）、float（小数）、str（字符串）、bool（True/False）。",
-        "type(x) 用来查看一个值的类型；print 负责把结果输出到屏幕。",
-        "字符串和数字不能直接相加，需要先转换类型，例如 int(\"3\") + 1。"
-      ],
-      "exercises": [
-        "定义三个变量分别保存你的年龄、身高（米）、姓名，并打印出它们的类型；",
-        "把字符串 \"42\" 转成整数再乘以 2，打印结果；",
-        "用一个 print 同时输出上面三个变量（用逗号分隔即可）。"
-      ],
-      "accept": "脚本能无报错运行，并打印出三个变量及其类型。",
-      "transfer": "任何数据处理的第一步都是「确认拿到的是什么类型」——类型错了，后面所有计算都会跟着错。",
-      "manualExample": "name = \"Alice\"\nage = 20\nheight = 1.68\n\nprint(name, type(name))\nprint(age + 1)\nprint(int(\"42\") * 2)",
-      "starterCode": "# 第 1 关：变量与基本类型\n# 今日目标：理解变量是「名字指向值」，分清 int / float / str / bool 四种基本类型\n#\n# ==========================================================\n# 示例代码 —— 照着复现一遍，跑通、看懂每一行\n# ==========================================================\n# name = \"Alice\"\n# age = 20\n# height = 1.68\n#\n# print(name, type(name))\n# print(age + 1)\n# print(int(\"42\") * 2)\n#\n# ==========================================================\n# 本关练习\n# ==========================================================\n#   1. 定义三个变量分别保存你的年龄、身高（米）、姓名，并打印出它们的类型；\n#   2. 把字符串 \"42\" 转成整数再乘以 2，打印结果；\n#   3. 用一个 print 同时输出上面三个变量（用逗号分隔即可）。\n#\n# 写完后按 Ctrl+Shift+P 运行「Python闯关训练营: 提交并批改当前文件」\n",
-      "tags": [
-        "变量",
-        "类型",
-        "print"
-      ],
-      "source": "示例题库 · 第 1 关（占位内容，请替换为自己的课程）"
+     "heading": "",
+     "text": "列表用方括号定义，元素可以不同类型，例如 xs = [1, 2, 3]。",
+     "code": ""
     },
     {
-      "id": "L02",
-      "day": 2,
-      "chapter": 1,
-      "chapterTitle": "Python 基础语法",
-      "title": "字符串与 f-string",
-      "difficulty": 1,
-      "estimatedMinutes": 60,
-      "goal": "掌握字符串的拼接、切片与 f-string 格式化输出",
-      "knowledge": [
-        "字符串可以用 + 拼接，用 * 重复，例如 \"-\" * 10 得到一条分隔线。",
-        "下标从 0 开始；s[0] 是第一个字符，s[-1] 是最后一个字符。",
-        "切片 s[a:b] 取的是「左闭右开」区间，不包含 b 位置。",
-        "f-string（f\"...\"）可以直接在花括号里嵌入变量或表达式，是最好用的格式化方式。"
-      ],
-      "exercises": [
-        "给定 s = \"python\"，分别打印它的首字符、末字符、前三个字符和反转结果；",
-        "用 f-string 打印一行「姓名：X，年龄：Y 岁」，X 和 Y 用变量代入；",
-        "打印一条长度为 20 的分隔线。"
-      ],
-      "accept": "切片结果正确，f-string 输出中变量已被正确替换。",
-      "transfer": "文本清洗、日志拼接、报告生成都建立在字符串操作之上，f-string 是日常使用频率最高的写法。",
-      "manualExample": "s = \"python\"\nprint(s[0])\nprint(s[-1])\nprint(s[:3])\nprint(s[::-1])\n\nname = \"Alice\"\nage = 20\nprint(f\"姓名：{name}，年龄：{age} 岁\")\nprint(\"-\" * 20)",
-      "starterCode": "# 第 2 关：字符串与 f-string\n# 今日目标：掌握字符串的拼接、切片与 f-string 格式化输出\n#\n# ==========================================================\n# 示例代码 —— 照着复现一遍，跑通、看懂每一行\n# ==========================================================\n# s = \"python\"\n# print(s[0])\n# print(s[-1])\n# print(s[:3])\n# print(s[::-1])\n#\n# name = \"Alice\"\n# age = 20\n# print(f\"姓名：{name}，年龄：{age} 岁\")\n# print(\"-\" * 20)\n#\n# ==========================================================\n# 本关练习\n# ==========================================================\n#   1. 给定 s = \"python\"，分别打印它的首字符、末字符、前三个字符和反转结果；\n#   2. 用 f-string 打印一行「姓名：X，年龄：Y 岁」，X 和 Y 用变量代入；\n#   3. 打印一条长度为 20 的分隔线。\n#\n# 写完后按 Ctrl+Shift+P 运行「Python闯关训练营: 提交并批改当前文件」\n",
-      "tags": [
-        "字符串",
-        "切片",
-        "f-string"
-      ],
-      "source": "示例题库 · 第 2 关（占位内容，请替换为自己的课程）"
+     "heading": "",
+     "text": "append 在末尾追加，insert 在指定位置插入，pop 取出并删除。",
+     "code": ""
     },
     {
-      "id": "L03",
-      "day": 3,
-      "chapter": 1,
-      "chapterTitle": "Python 基础语法",
-      "title": "列表与切片",
-      "difficulty": 2,
-      "estimatedMinutes": 90,
-      "goal": "会用列表存放一组数据，掌握增删改查与常用聚合函数",
-      "knowledge": [
-        "列表用方括号定义，元素可以不同类型，例如 xs = [1, 2, 3]。",
-        "append 在末尾追加，insert 在指定位置插入，pop 取出并删除。",
-        "len 取长度，sum 求和，max/min 取极值。",
-        "列表切片和字符串一样是左闭右开，并且会返回一个新列表。"
-      ],
-      "exercises": [
-        "建一个包含 5 个数字的列表，打印它的长度、总和与最大值；",
-        "在列表末尾追加一个数，再删掉第一个元素，打印结果；",
-        "用切片取出列表中间三个元素。"
-      ],
-      "accept": "列表的增删改查结果正确，切片取出的元素个数符合预期。",
-      "transfer": "列表是最基础的数据容器，读表格、读日志、读传感器数据，第一步都是拿到一个列表。",
-      "manualExample": "xs = [3, 1, 4, 1, 5]\nprint(len(xs), sum(xs), max(xs))\n\nxs.append(9)\nprint(xs)\n\ndel xs[0]\nprint(xs)\nprint(xs[1:4])",
-      "starterCode": "# 第 3 关：列表与切片\n# 今日目标：会用列表存放一组数据，掌握增删改查与常用聚合函数\n#\n# ==========================================================\n# 示例代码 —— 照着复现一遍，跑通、看懂每一行\n# ==========================================================\n# xs = [3, 1, 4, 1, 5]\n# print(len(xs), sum(xs), max(xs))\n#\n# xs.append(9)\n# print(xs)\n#\n# del xs[0]\n# print(xs)\n# print(xs[1:4])\n#\n# ==========================================================\n# 本关练习\n# ==========================================================\n#   1. 建一个包含 5 个数字的列表，打印它的长度、总和与最大值；\n#   2. 在列表末尾追加一个数，再删掉第一个元素，打印结果；\n#   3. 用切片取出列表中间三个元素。\n#\n# 写完后按 Ctrl+Shift+P 运行「Python闯关训练营: 提交并批改当前文件」\n",
-      "tags": [
-        "列表",
-        "切片",
-        "len"
-      ],
-      "source": "示例题库 · 第 3 关（占位内容，请替换为自己的课程）"
+     "heading": "",
+     "text": "len 取长度，sum 求和，max/min 取极值。",
+     "code": ""
     },
     {
-      "id": "L04",
-      "day": 4,
-      "chapter": 1,
-      "chapterTitle": "Python 基础语法",
-      "title": "条件与循环",
-      "difficulty": 2,
-      "estimatedMinutes": 90,
-      "goal": "用 if / elif / else 做分支，用 for 与 while 重复执行",
-      "knowledge": [
-        "if 后面跟一个条件表达式，为 True 才执行冒号下面的缩进块。",
-        "elif 是「否则如果」，可以有多个；else 是兜底。",
-        "for x in 可迭代对象 用来逐个取出元素；range(n) 生成 0 到 n-1。",
-        "while 在条件为真时反复执行，写的时候要确保条件最终会变假，否则会死循环。"
-      ],
-      "exercises": [
-        "写一个判断成绩等级的程序：90 以上为 A，80 以上为 B，60 以上为 C，否则为 D；",
-        "用 for 循环打印 1 到 10 的平方；",
-        "用 while 循环求 1 到 100 的和。"
-      ],
-      "accept": "三个分支的判定结果正确，两个循环的输出符合预期。",
-      "transfer": "分支决定「不同情况怎么办」，循环负责「批量重复做」，几乎所有业务逻辑都是这两者的组合。",
-      "manualExample": "score = 85\nif score >= 90:\n    print(\"A\")\nelif score >= 80:\n    print(\"B\")\nelif score >= 60:\n    print(\"C\")\nelse:\n    print(\"D\")\n\nfor i in range(1, 11):\n    print(i * i)\n\ntotal = 0\nn = 1\nwhile n <= 100:\n    total += n\n    n += 1\nprint(total)",
-      "starterCode": "# 第 4 关：条件与循环\n# 今日目标：用 if / elif / else 做分支，用 for 与 while 重复执行\n#\n# ==========================================================\n# 示例代码 —— 照着复现一遍，跑通、看懂每一行\n# ==========================================================\n# score = 85\n# if score >= 90:\n#     print(\"A\")\n# elif score >= 80:\n#     print(\"B\")\n# elif score >= 60:\n#     print(\"C\")\n# else:\n#     print(\"D\")\n#\n# for i in range(1, 11):\n#     print(i * i)\n#\n# total = 0\n# n = 1\n# while n <= 100:\n#     total += n\n#     n += 1\n# print(total)\n#\n# ==========================================================\n# 本关练习\n# ==========================================================\n#   1. 写一个判断成绩等级的程序：90 以上为 A，80 以上为 B，60 以上为 C，否则为 D；\n#   2. 用 for 循环打印 1 到 10 的平方；\n#   3. 用 while 循环求 1 到 100 的和。\n#\n# 写完后按 Ctrl+Shift+P 运行「Python闯关训练营: 提交并批改当前文件」\n",
-      "tags": [
-        "if",
-        "for",
-        "while"
-      ],
-      "source": "示例题库 · 第 4 关（占位内容，请替换为自己的课程）"
+     "heading": "",
+     "text": "列表切片和字符串一样是左闭右开，并且会返回一个新列表。",
+     "code": ""
     },
     {
-      "id": "L05",
-      "day": 5,
-      "chapter": 2,
-      "chapterTitle": "函数与常用库",
-      "title": "定义与调用函数",
-      "difficulty": 2,
-      "estimatedMinutes": 90,
-      "goal": "会把重复逻辑封装成函数，理解参数、返回值与默认值",
-      "knowledge": [
-        "def 定义函数，return 把结果交回给调用方；没有 return 时返回 None。",
-        "参数可以给默认值，例如 def f(x, n=2)，调用时可以省略 n。",
-        "函数内部定义的变量是局部的，函数外部访问不到。",
-        "把逻辑拆成小函数，是为了让每一段都容易被单独看懂和验证。"
-      ],
-      "exercises": [
-        "写一个函数 area(w, h) 返回矩形面积，并调用它打印结果；",
-        "写一个函数 greet(name, greeting=\"你好\")，用默认值和不传默认值各调用一次；",
-        "写一个函数 is_even(n) 返回布尔值，判断一个数是否为偶数。"
-      ],
-      "accept": "三个函数都能被正确调用，返回值符合预期。",
-      "transfer": "函数是可复用的最小单元。把一次性的脚本拆成函数，是走向可维护代码的第一步。",
-      "manualExample": "def area(w, h):\n    return w * h\n\nprint(area(3, 4))\n\ndef greet(name, greeting=\"你好\"):\n    return f\"{greeting}，{name}！\"\n\nprint(greet(\"Alice\"))\nprint(greet(\"Bob\", \"早上好\"))\n\ndef is_even(n):\n    return n % 2 == 0\n\nprint(is_even(4), is_even(7))",
-      "starterCode": "# 第 5 关：定义与调用函数\n# 今日目标：会把重复逻辑封装成函数，理解参数、返回值与默认值\n#\n# ==========================================================\n# 示例代码 —— 照着复现一遍，跑通、看懂每一行\n# ==========================================================\n# def area(w, h):\n#     return w * h\n#\n# print(area(3, 4))\n#\n# def greet(name, greeting=\"你好\"):\n#     return f\"{greeting}，{name}！\"\n#\n# print(greet(\"Alice\"))\n# print(greet(\"Bob\", \"早上好\"))\n#\n# def is_even(n):\n#     return n % 2 == 0\n#\n# print(is_even(4), is_even(7))\n#\n# ==========================================================\n# 本关练习\n# ==========================================================\n#   1. 写一个函数 area(w, h) 返回矩形面积，并调用它打印结果；\n#   2. 写一个函数 greet(name, greeting=\"你好\")，用默认值和不传默认值各调用一次；\n#   3. 写一个函数 is_even(n) 返回布尔值，判断一个数是否为偶数。\n#\n# 写完后按 Ctrl+Shift+P 运行「Python闯关训练营: 提交并批改当前文件」\n",
-      "tags": [
-        "函数",
-        "参数",
-        "return"
-      ],
-      "source": "示例题库 · 第 5 关（占位内容，请替换为自己的课程）"
-    },
-    {
-      "id": "L06",
-      "day": 6,
-      "chapter": 2,
-      "chapterTitle": "函数与常用库",
-      "title": "列表推导式",
-      "difficulty": 3,
-      "estimatedMinutes": 90,
-      "goal": "用一行表达式完成「遍历 + 过滤 + 变换」，替代冗长的 for 循环",
-      "knowledge": [
-        "基本形式：[表达式 for 变量 in 可迭代对象]。",
-        "加过滤条件：[表达式 for 变量 in 可迭代对象 if 条件]。",
-        "推导式返回的是一个新列表，不会修改原列表。",
-        "条件简单时用推导式更清晰；逻辑复杂时还是写普通循环更好读。"
-      ],
-      "exercises": [
-        "用推导式生成 1 到 20 的平方列表；",
-        "从一组数字中筛出所有偶数；",
-        "把一组字符串全部转成大写，并去掉长度小于 3 的项。"
-      ],
-      "accept": "三个推导式结果正确，且没有写成多层嵌套的 for 循环。",
-      "transfer": "数据清洗时大量使用「筛掉无效值 + 统一格式」，推导式是最简洁的表达方式。",
-      "manualExample": "squares = [i * i for i in range(1, 21)]\nprint(squares)\n\nxs = [3, 8, 1, 6, 10, 7]\nevens = [x for x in xs if x % 2 == 0]\nprint(evens)\n\nwords = [\"hi\", \"python\", \"go\", \"code\"]\nbig = [w.upper() for w in words if len(w) >= 3]\nprint(big)",
-      "starterCode": "# 第 6 关：列表推导式\n# 今日目标：用一行表达式完成「遍历 + 过滤 + 变换」，替代冗长的 for 循环\n#\n# ==========================================================\n# 示例代码 —— 照着复现一遍，跑通、看懂每一行\n# ==========================================================\n# squares = [i * i for i in range(1, 21)]\n# print(squares)\n#\n# xs = [3, 8, 1, 6, 10, 7]\n# evens = [x for x in xs if x % 2 == 0]\n# print(evens)\n#\n# words = [\"hi\", \"python\", \"go\", \"code\"]\n# big = [w.upper() for w in words if len(w) >= 3]\n# print(big)\n#\n# ==========================================================\n# 本关练习\n# ==========================================================\n#   1. 用推导式生成 1 到 20 的平方列表；\n#   2. 从一组数字中筛出所有偶数；\n#   3. 把一组字符串全部转成大写，并去掉长度小于 3 的项。\n#\n# 写完后按 Ctrl+Shift+P 运行「Python闯关训练营: 提交并批改当前文件」\n",
-      "tags": [
-        "列表推导式",
-        "过滤",
-        "变换"
-      ],
-      "source": "示例题库 · 第 6 关（占位内容，请替换为自己的课程）"
-    },
-    {
-      "id": "L07",
-      "day": 7,
-      "chapter": 2,
-      "chapterTitle": "函数与常用库",
-      "title": "字典与集合",
-      "difficulty": 3,
-      "estimatedMinutes": 90,
-      "goal": "用字典做「键 → 值」映射，用集合去重与做集合运算",
-      "knowledge": [
-        "字典用花括号定义，d[key] 取值，d[key] = v 赋值，key 不存在时取值会报 KeyError。",
-        "d.get(key, 默认值) 是更安全的取值方式，不会因为缺键而报错。",
-        "遍历字典：d.items() 同时拿到键和值，d.keys() / d.values() 只拿一边。",
-        "集合自动去重且无序，支持交集 &、并集 |、差集 -。"
-      ],
-      "exercises": [
-        "建一个字典保存三个人的年龄，用两种方式取出其中一个人的年龄；",
-        "统计一个列表里每个元素出现的次数（用字典累加）；",
-        "用集合求两个列表的交集与并集。"
-      ],
-      "accept": "字典取值不报错，计数结果正确，集合运算结果符合预期。",
-      "transfer": "「按键归组」「统计频次」是数据分析里最常见的两种操作，字典就是它们的底层工具。",
-      "manualExample": "ages = {\"Alice\": 20, \"Bob\": 22, \"Carol\": 19}\nprint(ages[\"Alice\"])\nprint(ages.get(\"Dave\", \"未知\"))\n\nfor k, v in ages.items():\n    print(k, v)\n\nxs = [\"a\", \"b\", \"a\", \"c\", \"a\"]\ncount = {}\nfor x in xs:\n    count[x] = count.get(x, 0) + 1\nprint(count)\n\na = [1, 2, 3, 4]\nb = [3, 4, 5, 6]\nprint(set(a) & set(b))\nprint(set(a) | set(b))",
-      "starterCode": "# 第 7 关：字典与集合\n# 今日目标：用字典做「键 → 值」映射，用集合去重与做集合运算\n#\n# ==========================================================\n# 示例代码 —— 照着复现一遍，跑通、看懂每一行\n# ==========================================================\n# ages = {\"Alice\": 20, \"Bob\": 22, \"Carol\": 19}\n# print(ages[\"Alice\"])\n# print(ages.get(\"Dave\", \"未知\"))\n#\n# for k, v in ages.items():\n#     print(k, v)\n#\n# xs = [\"a\", \"b\", \"a\", \"c\", \"a\"]\n# count = {}\n# for x in xs:\n#     count[x] = count.get(x, 0) + 1\n# print(count)\n#\n# a = [1, 2, 3, 4]\n# b = [3, 4, 5, 6]\n# print(set(a) & set(b))\n# print(set(a) | set(b))\n#\n# ==========================================================\n# 本关练习\n# ==========================================================\n#   1. 建一个字典保存三个人的年龄，用两种方式取出其中一个人的年龄；\n#   2. 统计一个列表里每个元素出现的次数（用字典累加）；\n#   3. 用集合求两个列表的交集与并集。\n#\n# 写完后按 Ctrl+Shift+P 运行「Python闯关训练营: 提交并批改当前文件」\n",
-      "tags": [
-        "字典",
-        "集合",
-        "统计"
-      ],
-      "source": "示例题库 · 第 7 关（占位内容，请替换为自己的课程）"
-    },
-    {
-      "id": "L08",
-      "day": 8,
-      "chapter": 2,
-      "chapterTitle": "函数与常用库",
-      "title": "文件读写",
-      "difficulty": 3,
-      "estimatedMinutes": 120,
-      "goal": "会用 with open 读写文本文件，并按行处理数据",
-      "knowledge": [
-        "with open(路径, \"r\", encoding=\"utf-8\") as f 会在块结束时自动关闭文件。",
-        "f.read() 一次读完全部内容；逐行处理更省内存，直接 for line in f 即可。",
-        "写入用模式 \"w\"（覆盖）或 \"a\"（追加），读用 \"r\"。",
-        "读进来的每一行末尾通常带换行符，用 line.strip() 去掉。"
-      ],
-      "exercises": [
-        "把三行文字写进 data.txt；",
-        "再把 data.txt 读出来，逐行打印（不要出现多余空行）；",
-        "统计文件里一共有多少行、一共多少个字符。"
-      ],
-      "accept": "文件被正确创建，读回的内容与写入一致，行数与字符数统计正确。",
-      "transfer": "读配置文件、读 CSV、写日志，都是文件读写的直接应用，这是脚本能真正干活的起点。",
-      "manualExample": "with open(\"data.txt\", \"w\", encoding=\"utf-8\") as f:\n    f.write(\"第一行\\n\")\n    f.write(\"第二行\\n\")\n    f.write(\"第三行\\n\")\n\nwith open(\"data.txt\", \"r\", encoding=\"utf-8\") as f:\n    lines = f.readlines()\n\nfor line in lines:\n    print(line.strip())\n\nprint(\"行数：\", len(lines))\nprint(\"字符数：\", sum(len(l) for l in lines))",
-      "starterCode": "# 第 8 关：文件读写\n# 今日目标：会用 with open 读写文本文件，并按行处理数据\n#\n# ==========================================================\n# 示例代码 —— 照着复现一遍，跑通、看懂每一行\n# ==========================================================\n# with open(\"data.txt\", \"w\", encoding=\"utf-8\") as f:\n#     f.write(\"第一行\\n\")\n#     f.write(\"第二行\\n\")\n#     f.write(\"第三行\\n\")\n#\n# with open(\"data.txt\", \"r\", encoding=\"utf-8\") as f:\n#     lines = f.readlines()\n#\n# for line in lines:\n#     print(line.strip())\n#\n# print(\"行数：\", len(lines))\n# print(\"字符数：\", sum(len(l) for l in lines))\n#\n# ==========================================================\n# 本关练习\n# ==========================================================\n#   1. 把三行文字写进 data.txt；\n#   2. 再把 data.txt 读出来，逐行打印（不要出现多余空行）；\n#   3. 统计文件里一共有多少行、一共多少个字符。\n#\n# 写完后按 Ctrl+Shift+P 运行「Python闯关训练营: 提交并批改当前文件」\n",
-      "tags": [
-        "文件",
-        "with",
-        "编码"
-      ],
-      "source": "示例题库 · 第 8 关（占位内容，请替换为自己的课程）"
+     "heading": "示例代码",
+     "text": "把这段代码敲一遍并跑通，再去做下面的练习。",
+     "code": "xs = [3, 1, 4, 1, 5]\nprint(len(xs), sum(xs), max(xs))\n\nxs.append(9)\nprint(xs)\n\ndel xs[0]\nprint(xs)\nprint(xs[1:4])"
     }
-  ]
+   ]
+  },
+  {
+   "id": "L04",
+   "day": 4,
+   "chapter": 1,
+   "chapterTitle": "Python 基础语法",
+   "title": "条件与循环",
+   "difficulty": 2,
+   "estimatedMinutes": 90,
+   "goal": "用 if / elif / else 做分支，用 for 与 while 重复执行",
+   "knowledge": [
+    "if 后面跟一个条件表达式，为 True 才执行冒号下面的缩进块。",
+    "elif 是「否则如果」，可以有多个；else 是兜底。",
+    "for x in 可迭代对象 用来逐个取出元素；range(n) 生成 0 到 n-1。",
+    "while 在条件为真时反复执行，写的时候要确保条件最终会变假，否则会死循环。"
+   ],
+   "exercises": [
+    "写一个判断成绩等级的程序：90 以上为 A，80 以上为 B，60 以上为 C，否则为 D；",
+    "用 for 循环打印 1 到 10 的平方；",
+    "用 while 循环求 1 到 100 的和。"
+   ],
+   "accept": "三个分支的判定结果正确，两个循环的输出符合预期。",
+   "transfer": "分支决定「不同情况怎么办」，循环负责「批量重复做」，几乎所有业务逻辑都是这两者的组合。",
+   "manualExample": "score = 85\nif score >= 90:\n    print(\"A\")\nelif score >= 80:\n    print(\"B\")\nelif score >= 60:\n    print(\"C\")\nelse:\n    print(\"D\")\n\nfor i in range(1, 11):\n    print(i * i)\n\ntotal = 0\nn = 1\nwhile n <= 100:\n    total += n\n    n += 1\nprint(total)",
+   "starterCode": "# 第 4 关：条件与循环\n# 今日目标：用 if / elif / else 做分支，用 for 与 while 重复执行\n#\n# ==========================================================\n# 示例代码 —— 照着复现一遍，跑通、看懂每一行\n# ==========================================================\n# score = 85\n# if score >= 90:\n#     print(\"A\")\n# elif score >= 80:\n#     print(\"B\")\n# elif score >= 60:\n#     print(\"C\")\n# else:\n#     print(\"D\")\n#\n# for i in range(1, 11):\n#     print(i * i)\n#\n# total = 0\n# n = 1\n# while n <= 100:\n#     total += n\n#     n += 1\n# print(total)\n#\n# ==========================================================\n# 本关练习\n# ==========================================================\n#   1. 写一个判断成绩等级的程序：90 以上为 A，80 以上为 B，60 以上为 C，否则为 D；\n#   2. 用 for 循环打印 1 到 10 的平方；\n#   3. 用 while 循环求 1 到 100 的和。\n#\n# 写完后按 Ctrl+Shift+P 运行「Python闯关训练营: 提交并批改当前文件」\n",
+   "tags": [
+    "if",
+    "for",
+    "while"
+   ],
+   "source": "示例题库 · 第 4 关（占位内容，请替换为自己的课程）",
+   "lesson": [
+    {
+     "heading": "",
+     "text": "if 后面跟一个条件表达式，为 True 才执行冒号下面的缩进块。",
+     "code": ""
+    },
+    {
+     "heading": "",
+     "text": "elif 是「否则如果」，可以有多个；else 是兜底。",
+     "code": ""
+    },
+    {
+     "heading": "",
+     "text": "for x in 可迭代对象 用来逐个取出元素；range(n) 生成 0 到 n-1。",
+     "code": ""
+    },
+    {
+     "heading": "",
+     "text": "while 在条件为真时反复执行，写的时候要确保条件最终会变假，否则会死循环。",
+     "code": ""
+    },
+    {
+     "heading": "示例代码",
+     "text": "把这段代码敲一遍并跑通，再去做下面的练习。",
+     "code": "score = 85\nif score >= 90:\n    print(\"A\")\nelif score >= 80:\n    print(\"B\")\nelif score >= 60:\n    print(\"C\")\nelse:\n    print(\"D\")\n\nfor i in range(1, 11):\n    print(i * i)\n\ntotal = 0\nn = 1\nwhile n <= 100:\n    total += n\n    n += 1\nprint(total)"
+    }
+   ]
+  },
+  {
+   "id": "L05",
+   "day": 5,
+   "chapter": 2,
+   "chapterTitle": "函数与常用库",
+   "title": "定义与调用函数",
+   "difficulty": 2,
+   "estimatedMinutes": 90,
+   "goal": "会把重复逻辑封装成函数，理解参数、返回值与默认值",
+   "knowledge": [
+    "def 定义函数，return 把结果交回给调用方；没有 return 时返回 None。",
+    "参数可以给默认值，例如 def f(x, n=2)，调用时可以省略 n。",
+    "函数内部定义的变量是局部的，函数外部访问不到。",
+    "把逻辑拆成小函数，是为了让每一段都容易被单独看懂和验证。"
+   ],
+   "exercises": [
+    "写一个函数 area(w, h) 返回矩形面积，并调用它打印结果；",
+    "写一个函数 greet(name, greeting=\"你好\")，用默认值和不传默认值各调用一次；",
+    "写一个函数 is_even(n) 返回布尔值，判断一个数是否为偶数。"
+   ],
+   "accept": "三个函数都能被正确调用，返回值符合预期。",
+   "transfer": "函数是可复用的最小单元。把一次性的脚本拆成函数，是走向可维护代码的第一步。",
+   "manualExample": "def area(w, h):\n    return w * h\n\nprint(area(3, 4))\n\ndef greet(name, greeting=\"你好\"):\n    return f\"{greeting}，{name}！\"\n\nprint(greet(\"Alice\"))\nprint(greet(\"Bob\", \"早上好\"))\n\ndef is_even(n):\n    return n % 2 == 0\n\nprint(is_even(4), is_even(7))",
+   "starterCode": "# 第 5 关：定义与调用函数\n# 今日目标：会把重复逻辑封装成函数，理解参数、返回值与默认值\n#\n# ==========================================================\n# 示例代码 —— 照着复现一遍，跑通、看懂每一行\n# ==========================================================\n# def area(w, h):\n#     return w * h\n#\n# print(area(3, 4))\n#\n# def greet(name, greeting=\"你好\"):\n#     return f\"{greeting}，{name}！\"\n#\n# print(greet(\"Alice\"))\n# print(greet(\"Bob\", \"早上好\"))\n#\n# def is_even(n):\n#     return n % 2 == 0\n#\n# print(is_even(4), is_even(7))\n#\n# ==========================================================\n# 本关练习\n# ==========================================================\n#   1. 写一个函数 area(w, h) 返回矩形面积，并调用它打印结果；\n#   2. 写一个函数 greet(name, greeting=\"你好\")，用默认值和不传默认值各调用一次；\n#   3. 写一个函数 is_even(n) 返回布尔值，判断一个数是否为偶数。\n#\n# 写完后按 Ctrl+Shift+P 运行「Python闯关训练营: 提交并批改当前文件」\n",
+   "tags": [
+    "函数",
+    "参数",
+    "return"
+   ],
+   "source": "示例题库 · 第 5 关（占位内容，请替换为自己的课程）",
+   "lesson": [
+    {
+     "heading": "",
+     "text": "def 定义函数，return 把结果交回给调用方；没有 return 时返回 None。",
+     "code": ""
+    },
+    {
+     "heading": "",
+     "text": "参数可以给默认值，例如 def f(x, n=2)，调用时可以省略 n。",
+     "code": ""
+    },
+    {
+     "heading": "",
+     "text": "函数内部定义的变量是局部的，函数外部访问不到。",
+     "code": ""
+    },
+    {
+     "heading": "",
+     "text": "把逻辑拆成小函数，是为了让每一段都容易被单独看懂和验证。",
+     "code": ""
+    },
+    {
+     "heading": "示例代码",
+     "text": "把这段代码敲一遍并跑通，再去做下面的练习。",
+     "code": "def area(w, h):\n    return w * h\n\nprint(area(3, 4))\n\ndef greet(name, greeting=\"你好\"):\n    return f\"{greeting}，{name}！\"\n\nprint(greet(\"Alice\"))\nprint(greet(\"Bob\", \"早上好\"))\n\ndef is_even(n):\n    return n % 2 == 0\n\nprint(is_even(4), is_even(7))"
+    }
+   ]
+  },
+  {
+   "id": "L06",
+   "day": 6,
+   "chapter": 2,
+   "chapterTitle": "函数与常用库",
+   "title": "列表推导式",
+   "difficulty": 3,
+   "estimatedMinutes": 90,
+   "goal": "用一行表达式完成「遍历 + 过滤 + 变换」，替代冗长的 for 循环",
+   "knowledge": [
+    "基本形式：[表达式 for 变量 in 可迭代对象]。",
+    "加过滤条件：[表达式 for 变量 in 可迭代对象 if 条件]。",
+    "推导式返回的是一个新列表，不会修改原列表。",
+    "条件简单时用推导式更清晰；逻辑复杂时还是写普通循环更好读。"
+   ],
+   "exercises": [
+    "用推导式生成 1 到 20 的平方列表；",
+    "从一组数字中筛出所有偶数；",
+    "把一组字符串全部转成大写，并去掉长度小于 3 的项。"
+   ],
+   "accept": "三个推导式结果正确，且没有写成多层嵌套的 for 循环。",
+   "transfer": "数据清洗时大量使用「筛掉无效值 + 统一格式」，推导式是最简洁的表达方式。",
+   "manualExample": "squares = [i * i for i in range(1, 21)]\nprint(squares)\n\nxs = [3, 8, 1, 6, 10, 7]\nevens = [x for x in xs if x % 2 == 0]\nprint(evens)\n\nwords = [\"hi\", \"python\", \"go\", \"code\"]\nbig = [w.upper() for w in words if len(w) >= 3]\nprint(big)",
+   "starterCode": "# 第 6 关：列表推导式\n# 今日目标：用一行表达式完成「遍历 + 过滤 + 变换」，替代冗长的 for 循环\n#\n# ==========================================================\n# 示例代码 —— 照着复现一遍，跑通、看懂每一行\n# ==========================================================\n# squares = [i * i for i in range(1, 21)]\n# print(squares)\n#\n# xs = [3, 8, 1, 6, 10, 7]\n# evens = [x for x in xs if x % 2 == 0]\n# print(evens)\n#\n# words = [\"hi\", \"python\", \"go\", \"code\"]\n# big = [w.upper() for w in words if len(w) >= 3]\n# print(big)\n#\n# ==========================================================\n# 本关练习\n# ==========================================================\n#   1. 用推导式生成 1 到 20 的平方列表；\n#   2. 从一组数字中筛出所有偶数；\n#   3. 把一组字符串全部转成大写，并去掉长度小于 3 的项。\n#\n# 写完后按 Ctrl+Shift+P 运行「Python闯关训练营: 提交并批改当前文件」\n",
+   "tags": [
+    "列表推导式",
+    "过滤",
+    "变换"
+   ],
+   "source": "示例题库 · 第 6 关（占位内容，请替换为自己的课程）",
+   "lesson": [
+    {
+     "heading": "",
+     "text": "基本形式：[表达式 for 变量 in 可迭代对象]。",
+     "code": ""
+    },
+    {
+     "heading": "",
+     "text": "加过滤条件：[表达式 for 变量 in 可迭代对象 if 条件]。",
+     "code": ""
+    },
+    {
+     "heading": "",
+     "text": "推导式返回的是一个新列表，不会修改原列表。",
+     "code": ""
+    },
+    {
+     "heading": "",
+     "text": "条件简单时用推导式更清晰；逻辑复杂时还是写普通循环更好读。",
+     "code": ""
+    },
+    {
+     "heading": "示例代码",
+     "text": "把这段代码敲一遍并跑通，再去做下面的练习。",
+     "code": "squares = [i * i for i in range(1, 21)]\nprint(squares)\n\nxs = [3, 8, 1, 6, 10, 7]\nevens = [x for x in xs if x % 2 == 0]\nprint(evens)\n\nwords = [\"hi\", \"python\", \"go\", \"code\"]\nbig = [w.upper() for w in words if len(w) >= 3]\nprint(big)"
+    }
+   ]
+  },
+  {
+   "id": "L07",
+   "day": 7,
+   "chapter": 2,
+   "chapterTitle": "函数与常用库",
+   "title": "字典与集合",
+   "difficulty": 3,
+   "estimatedMinutes": 90,
+   "goal": "用字典做「键 → 值」映射，用集合去重与做集合运算",
+   "knowledge": [
+    "字典用花括号定义，d[key] 取值，d[key] = v 赋值，key 不存在时取值会报 KeyError。",
+    "d.get(key, 默认值) 是更安全的取值方式，不会因为缺键而报错。",
+    "遍历字典：d.items() 同时拿到键和值，d.keys() / d.values() 只拿一边。",
+    "集合自动去重且无序，支持交集 &、并集 |、差集 -。"
+   ],
+   "exercises": [
+    "建一个字典保存三个人的年龄，用两种方式取出其中一个人的年龄；",
+    "统计一个列表里每个元素出现的次数（用字典累加）；",
+    "用集合求两个列表的交集与并集。"
+   ],
+   "accept": "字典取值不报错，计数结果正确，集合运算结果符合预期。",
+   "transfer": "「按键归组」「统计频次」是数据分析里最常见的两种操作，字典就是它们的底层工具。",
+   "manualExample": "ages = {\"Alice\": 20, \"Bob\": 22, \"Carol\": 19}\nprint(ages[\"Alice\"])\nprint(ages.get(\"Dave\", \"未知\"))\n\nfor k, v in ages.items():\n    print(k, v)\n\nxs = [\"a\", \"b\", \"a\", \"c\", \"a\"]\ncount = {}\nfor x in xs:\n    count[x] = count.get(x, 0) + 1\nprint(count)\n\na = [1, 2, 3, 4]\nb = [3, 4, 5, 6]\nprint(set(a) & set(b))\nprint(set(a) | set(b))",
+   "starterCode": "# 第 7 关：字典与集合\n# 今日目标：用字典做「键 → 值」映射，用集合去重与做集合运算\n#\n# ==========================================================\n# 示例代码 —— 照着复现一遍，跑通、看懂每一行\n# ==========================================================\n# ages = {\"Alice\": 20, \"Bob\": 22, \"Carol\": 19}\n# print(ages[\"Alice\"])\n# print(ages.get(\"Dave\", \"未知\"))\n#\n# for k, v in ages.items():\n#     print(k, v)\n#\n# xs = [\"a\", \"b\", \"a\", \"c\", \"a\"]\n# count = {}\n# for x in xs:\n#     count[x] = count.get(x, 0) + 1\n# print(count)\n#\n# a = [1, 2, 3, 4]\n# b = [3, 4, 5, 6]\n# print(set(a) & set(b))\n# print(set(a) | set(b))\n#\n# ==========================================================\n# 本关练习\n# ==========================================================\n#   1. 建一个字典保存三个人的年龄，用两种方式取出其中一个人的年龄；\n#   2. 统计一个列表里每个元素出现的次数（用字典累加）；\n#   3. 用集合求两个列表的交集与并集。\n#\n# 写完后按 Ctrl+Shift+P 运行「Python闯关训练营: 提交并批改当前文件」\n",
+   "tags": [
+    "字典",
+    "集合",
+    "统计"
+   ],
+   "source": "示例题库 · 第 7 关（占位内容，请替换为自己的课程）",
+   "lesson": [
+    {
+     "heading": "",
+     "text": "字典用花括号定义，d[key] 取值，d[key] = v 赋值，key 不存在时取值会报 KeyError。",
+     "code": ""
+    },
+    {
+     "heading": "",
+     "text": "d.get(key, 默认值) 是更安全的取值方式，不会因为缺键而报错。",
+     "code": ""
+    },
+    {
+     "heading": "",
+     "text": "遍历字典：d.items() 同时拿到键和值，d.keys() / d.values() 只拿一边。",
+     "code": ""
+    },
+    {
+     "heading": "",
+     "text": "集合自动去重且无序，支持交集 &、并集 |、差集 -。",
+     "code": ""
+    },
+    {
+     "heading": "示例代码",
+     "text": "把这段代码敲一遍并跑通，再去做下面的练习。",
+     "code": "ages = {\"Alice\": 20, \"Bob\": 22, \"Carol\": 19}\nprint(ages[\"Alice\"])\nprint(ages.get(\"Dave\", \"未知\"))\n\nfor k, v in ages.items():\n    print(k, v)\n\nxs = [\"a\", \"b\", \"a\", \"c\", \"a\"]\ncount = {}\nfor x in xs:\n    count[x] = count.get(x, 0) + 1\nprint(count)\n\na = [1, 2, 3, 4]\nb = [3, 4, 5, 6]\nprint(set(a) & set(b))\nprint(set(a) | set(b))"
+    }
+   ]
+  },
+  {
+   "id": "L08",
+   "day": 8,
+   "chapter": 2,
+   "chapterTitle": "函数与常用库",
+   "title": "文件读写",
+   "difficulty": 3,
+   "estimatedMinutes": 120,
+   "goal": "会用 with open 读写文本文件，并按行处理数据",
+   "knowledge": [
+    "with open(路径, \"r\", encoding=\"utf-8\") as f 会在块结束时自动关闭文件。",
+    "f.read() 一次读完全部内容；逐行处理更省内存，直接 for line in f 即可。",
+    "写入用模式 \"w\"（覆盖）或 \"a\"（追加），读用 \"r\"。",
+    "读进来的每一行末尾通常带换行符，用 line.strip() 去掉。"
+   ],
+   "exercises": [
+    "把三行文字写进 data.txt；",
+    "再把 data.txt 读出来，逐行打印（不要出现多余空行）；",
+    "统计文件里一共有多少行、一共多少个字符。"
+   ],
+   "accept": "文件被正确创建，读回的内容与写入一致，行数与字符数统计正确。",
+   "transfer": "读配置文件、读 CSV、写日志，都是文件读写的直接应用，这是脚本能真正干活的起点。",
+   "manualExample": "with open(\"data.txt\", \"w\", encoding=\"utf-8\") as f:\n    f.write(\"第一行\\n\")\n    f.write(\"第二行\\n\")\n    f.write(\"第三行\\n\")\n\nwith open(\"data.txt\", \"r\", encoding=\"utf-8\") as f:\n    lines = f.readlines()\n\nfor line in lines:\n    print(line.strip())\n\nprint(\"行数：\", len(lines))\nprint(\"字符数：\", sum(len(l) for l in lines))",
+   "starterCode": "# 第 8 关：文件读写\n# 今日目标：会用 with open 读写文本文件，并按行处理数据\n#\n# ==========================================================\n# 示例代码 —— 照着复现一遍，跑通、看懂每一行\n# ==========================================================\n# with open(\"data.txt\", \"w\", encoding=\"utf-8\") as f:\n#     f.write(\"第一行\\n\")\n#     f.write(\"第二行\\n\")\n#     f.write(\"第三行\\n\")\n#\n# with open(\"data.txt\", \"r\", encoding=\"utf-8\") as f:\n#     lines = f.readlines()\n#\n# for line in lines:\n#     print(line.strip())\n#\n# print(\"行数：\", len(lines))\n# print(\"字符数：\", sum(len(l) for l in lines))\n#\n# ==========================================================\n# 本关练习\n# ==========================================================\n#   1. 把三行文字写进 data.txt；\n#   2. 再把 data.txt 读出来，逐行打印（不要出现多余空行）；\n#   3. 统计文件里一共有多少行、一共多少个字符。\n#\n# 写完后按 Ctrl+Shift+P 运行「Python闯关训练营: 提交并批改当前文件」\n",
+   "tags": [
+    "文件",
+    "with",
+    "编码"
+   ],
+   "source": "示例题库 · 第 8 关（占位内容，请替换为自己的课程）",
+   "lesson": [
+    {
+     "heading": "",
+     "text": "with open(路径, \"r\", encoding=\"utf-8\") as f 会在块结束时自动关闭文件。",
+     "code": ""
+    },
+    {
+     "heading": "",
+     "text": "f.read() 一次读完全部内容；逐行处理更省内存，直接 for line in f 即可。",
+     "code": ""
+    },
+    {
+     "heading": "",
+     "text": "写入用模式 \"w\"（覆盖）或 \"a\"（追加），读用 \"r\"。",
+     "code": ""
+    },
+    {
+     "heading": "",
+     "text": "读进来的每一行末尾通常带换行符，用 line.strip() 去掉。",
+     "code": ""
+    },
+    {
+     "heading": "示例代码",
+     "text": "把这段代码敲一遍并跑通，再去做下面的练习。",
+     "code": "with open(\"data.txt\", \"w\", encoding=\"utf-8\") as f:\n    f.write(\"第一行\\n\")\n    f.write(\"第二行\\n\")\n    f.write(\"第三行\\n\")\n\nwith open(\"data.txt\", \"r\", encoding=\"utf-8\") as f:\n    lines = f.readlines()\n\nfor line in lines:\n    print(line.strip())\n\nprint(\"行数：\", len(lines))\nprint(\"字符数：\", sum(len(l) for l in lines))"
+    }
+   ]
+  }
+ ]
 }

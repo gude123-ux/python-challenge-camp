@@ -4,6 +4,16 @@
  * 所有持久化结构都带 schemaVersion，方便后续升级时做迁移。
  */
 
+/** 讲义里的一个块：小标题 + 完整段落 + 相关示例代码 */
+export interface LessonBlock {
+  /** 小标题（可能为空） */
+  heading: string;
+  /** 完整段落正文（可能为空，例如只有代码） */
+  text: string;
+  /** 该段配套的示例代码（可能为空） */
+  code: string;
+}
+
 /** 题库里的一个关卡（由你自己的生成脚本产出） */
 export interface Level {
   /** 关卡 ID，如 L01 / A07 */
@@ -21,6 +31,14 @@ export interface Level {
   goal: string;
   /** 知识点简述（来自课程材料正文的讲解段落） */
   knowledge: string[];
+  /**
+   * 本关讲义：小标题 + 完整段落 + 示例代码。
+   *
+   * 与 knowledge 的区别：knowledge 是给面板做速览用的短句，
+   * lesson 是「学生要照着学」的正文 —— 学生只看这一页就该知道怎么动手。
+   * （旧题库没有这个字段，所以是可选的。）
+   */
+  lesson?: LessonBlock[];
   /** 编程练习题 */
   exercises: string[];
   /** 验收标准 */

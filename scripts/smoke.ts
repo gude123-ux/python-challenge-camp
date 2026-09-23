@@ -26,6 +26,7 @@ import {
   buildErrorMessages,
   buildAlternativeSolutionsMessages,
   buildAskMessages,
+  buildAnswerMessages,
 } from '../src/ai/prompt';
 import { renderMarkdown } from '../src/panels/html';
 import { solutionsFilePath } from '../src/util/paths';
@@ -690,6 +691,65 @@ async function main(): Promise<void> {
     pendUnreadable.length === 1 && pendUnreadable[0].levelId === 'L04',
     '单个文件读不到时跳过它，不影响其它关卡',
     JSON.stringify(pendUnreadable.map((p) => p.levelId))
+  );
+
+  // ---------------------------------------------------------- 12. 本关讲义
+  // 背景（用户实测）：「知识点几乎没有，我咋知道咋做」——
+  // 旧题库的知识点是 PDF 换行切碎的半句（"…把右边的结" / "果放进左边的盒子…"），
+  // 学生根本读不懂。所以必须校验讲义是**完整句子**且有足够内容。
+  section('12. 本关讲义（不能被 PDF 换行切碎）');
+
+  const lessonLevels = all.filter((l) => (l.lesson ?? []).length > 0);
+  ok(
+    lessonLevels.length === 0 || lessonLevels.length >= Math.ceil(all.length * 0.8),
+    '讲义覆盖度：要么没启用该字段，要么 >= 80% 的关卡有讲义',
+    `${lessonLevels.length}/${all.length}`
+  );
+
+  const lessonBlocks = all.flatMap((l) => l.lesson ?? []);
+  ok(
+    lessonBlocks.every((b) => (b.heading || b.text || b.code).trim().length > 0),
+    '每个讲义块都有内容（没有空块）'
+  );
+  const lessonTexts = lessonBlocks.map((b) => b.text).filter((t) => t && t.trim());
+  ok(
+    lessonTexts.every((t) => t.trim().length >= 8),
+    '讲义段落都不是碎片（每条 >= 8 字）',
+    `${lessonTexts.filter((t) => t.trim().length < 8).length} 条过短`
+  );
+  const completeRatio =
+    lessonTexts.filter((t) => /[。！？：)）」』】]$/.test(t.trim())).length / (lessonTexts.length || 1);
+  ok(
+    completeRatio >= 0.7,
+    '★ >= 70% 的讲义段落以标点收尾（说明换行被正确拼回了完整句子）',
+    `${Math.round(completeRatio * 100)}%`
+  );
+  const lessonChars = all.reduce(
+    (sum, l) => sum + (l.lesson ?? []).reduce((s, b) => s + (b.text?.length ?? 0) + (b.code?.length ?? 0), 0),
+    0
+  );
+  ok(
+    lessonLevels.length === 0 || lessonChars / all.length >= 300,
+    '平均每关讲义 >= 300 字符（够学生自己看懂）',
+    `${Math.round(lessonChars / all.length)} 字符/关`
+  );
+
+  // 讲义必须真的进了提示词 —— 否则模型还是"不知道本关教了什么"
+  const lessonGradeMsgs = buildMessages({
+    level,
+    code: 'print(1)',
+    run: null,
+    strictMode: false,
+    weakPoints: [],
+  });
+  ok(
+    (level.lesson ?? []).length === 0 || lessonGradeMsgs[1].content.includes('本关讲义'),
+    '批改提示词带上了本关讲义'
+  );
+  const lessonAnswerMsgs = buildAnswerMessages(level);
+  ok(
+    (level.lesson ?? []).length === 0 || lessonAnswerMsgs[1].content.includes('本关讲义'),
+    '参考答案提示词带上了本关讲义'
   );
 
   // ---------------------------------------------------------- 收尾

@@ -183,6 +183,15 @@ async function main() {
   const bank = JSON.parse(fs.readFileSync(path.join(root, 'data', 'levels.json'), 'utf8'));
   ok(bank.levels.length >= 5 && bank.chapters.length >= 1, '题库结构可用（关卡数 >= 5、章节数 >= 1）', `${bank.levels.length} 关 / ${bank.chapters.length} 章`);
 
+  // 打包产物里必须真的有「本关讲义」的渲染代码 ——
+  // esbuild 默认 charset=ascii，中文会变成 \uXXXX，所以要先解码再找。
+  const bundleText = fs
+    .readFileSync(entry, 'utf8')
+    .replace(/\\u([0-9A-Fa-f]{4})/g, (_m, h) => String.fromCharCode(parseInt(h, 16)));
+  ok(bundleText.includes('本关讲解'), '打包产物含「本关讲解」渲染（学生能直接看到讲义）');
+  ok(bundleText.includes('知识点速览'), '打包产物含「知识点速览」渲染');
+  ok(bundleText.includes('正在批改中'), '打包产物含批改防重入提示（点一次只跑一个批改）');
+
   console.log('\n=== F. 激活期副作用 ===');
   ok(stub.__state.registeredViews.length > 0, 'activate 期间注册了侧边栏');
   ok(stub.__state.registeredCommands.length >= declaredCmds.length, 'activate 期间注册了全部命令');

@@ -603,6 +603,23 @@ async function runLevel(
   context: vscode.ExtensionContext,
   document?: vscode.TextDocument
 ): Promise<void> {
+  if (runningInFlight.has(level.id)) {
+    void vscode.window.showInformationMessage(`第 ${level.day} 关正在运行中…`);
+    return;
+  }
+  runningInFlight.add(level.id);
+  try {
+    await runLevelInner(level, context, document);
+  } finally {
+    runningInFlight.delete(level.id);
+  }
+}
+
+async function runLevelInner(
+  level: Level,
+  context: vscode.ExtensionContext,
+  document?: vscode.TextDocument
+): Promise<void> {
   const cfg = readConfig();
   const uri = document?.uri ?? levelFileUri(context, level);
 
@@ -707,12 +724,43 @@ async function submitPendingLevels(context: vscode.ExtensionContext): Promise<vo
   sidebar.refresh();
 }
 
+/**
+ * 正在批改 / 正在运行的关卡。
+ *
+ * ★ 防重入：用户点一次「提交并批改」绝不该跑出两个批改。
+ * 早期版本没有这道闸门，加上侧边栏在 view 被重复 resolve 时会注册多个消息监听，
+ * 实测出现「同一关两次成绩只差 3~7 秒、结论还不一样」——
+ * 既浪费 token（用户的端点本来就限流），也让学生看到两份矛盾的评语。
+ */
+const gradingInFlight = new Set<string>();
+const runningInFlight = new Set<string>();
+
 /** 提交并批改某一关的代码 */
 async function submitLevel(
   level: Level,
   context: vscode.ExtensionContext,
   document?: vscode.TextDocument,
   /** 批量补交时为 true：不弹需要用户点确认的对话框 */
+  quiet = false
+): Promise<void> {
+  if (gradingInFlight.has(level.id)) {
+    if (!quiet) {
+      void vscode.window.showInformationMessage(`第 ${level.day} 关正在批改中，请稍等它跑完。`);
+    }
+    return;
+  }
+  gradingInFlight.add(level.id);
+  try {
+    await submitLevelInner(level, context, document, quiet);
+  } finally {
+    gradingInFlight.delete(level.id);
+  }
+}
+
+async function submitLevelInner(
+  level: Level,
+  context: vscode.ExtensionContext,
+  document?: vscode.TextDocument,
   quiet = false
 ): Promise<void> {
   const cfg = readConfig();

@@ -59,6 +59,8 @@ const SYSTEM = `你是「Python 闯关训练营」的批改助教。
   此时 exerciseChecks 里把该条 done 设为 false，但 comment 必须写"证据不足，无法验证，请自己确认结果"，
   并且把「怎么自己验证」写进 suggestions —— 而不是写进 issues。
 - 只有当你有明确反证时（代码逻辑与题目要求不符、结果明显不对、复现缺失、报错），才判该项未完成。
+- **以本关讲义为准**：讲义（见下）里教了什么写法、什么命名习惯，就按那个标准判。
+  学生用了讲义没教过的东西不算错，但要在 suggestions 里提醒「这是后面的内容，现在先按本关方法写」。
 
 评语要求：
 - 用中文，语气像一位认真的助教：直接指出问题，不空泛表扬。
@@ -113,6 +115,10 @@ function levelSection(level: Level): string {
     '【知识点简述】',
     ...level.knowledge.map((k, i) => `${i + 1}. ${k}`),
   ];
+  const lesson = lessonText(level, 1800);
+  if (lesson) {
+    lines.push('', lesson);
+  }
   if (level.manualExample) {
     lines.push(
       '',
@@ -128,6 +134,37 @@ function levelSection(level: Level): string {
     lines.push('', `【验收标准】${level.accept}`);
   }
   return lines.join('\n');
+}
+
+/**
+ * 把「本关讲义」拼成提示词里的一节。
+ *
+ * 为什么要给模型看讲义：判「练习有没有按要求完成」必须知道**本关教了什么方法**。
+ * 只给题目，模型容易用后面章节的写法判学生（例如零基础关用 numpy 判对错），
+ * 或者把「没讲过的东西」当成必做项。
+ */
+function lessonText(level: Level, maxChars: number): string {
+  const blocks = level.lesson ?? [];
+  if (!blocks.length) {
+    return '';
+  }
+  const parts: string[] = ['【本关讲义（学生手上的教材内容，批改/解答要以它为准）】'];
+  for (const b of blocks) {
+    if (b.heading) {
+      parts.push(`■ ${b.heading}`);
+    }
+    if (b.text) {
+      parts.push(b.text);
+    }
+    if (b.code) {
+      parts.push('```python', b.code, '```');
+    }
+  }
+  let body = parts.join('\n');
+  if (body.length > maxChars) {
+    body = `${body.slice(0, maxChars)}\n…（讲义过长，已截断）`;
+  }
+  return body;
 }
 
 export function buildMessages(ctx: PromptContext): Array<{ role: 'system' | 'user'; content: string }> {
@@ -197,6 +234,8 @@ const ANSWER_SYSTEM = `你是一位耐心但不说废话的 Python 助教，正�
 - 每道练习都要给出：**这道题在考什么** → **解题思路（分步骤）** → **参考代码**。
 - 参考代码必须是完整、可直接运行的 Python 代码，放在 \`\`\`python 代码块里，并带必要的中文注释。
 - **只能使用本关及之前已经教过的语法**。学生还没学的东西不要用；如果某个更简洁的写法超出当前范围，可以放在「进阶写法」里并注明"以后会学到"。
+- 如果下面给了【本关讲义】，**讲解必须与讲义的说法一致**（术语、方法、命名习惯都对齐），
+  并且要假设学生只读过这份讲义 —— 讲义里没提的概念，先在正文里补一句解释再用。
 - 讲思路时要说清"为什么这么做"，而不只是"抄这段代码"。
 - 最后必须给出【易错点】和【怎么自己验证做对了】两节 —— 让学生有能力自查，而不是只会对答案。
 - 不要寒暄，不要说"希望对你有帮助"，直接开始。`;
@@ -211,6 +250,10 @@ function answerLevelSection(level: Level): string {
     '【知识点简述】',
     ...level.knowledge.map((k, i) => `${i + 1}. ${k}`),
   ];
+  const lesson = lessonText(level, 4000);
+  if (lesson) {
+    lines.push('', lesson);
+  }
   if (level.manualExample) {
     lines.push('', '【示例代码（本关已经给过的参考示例）】', '```python', level.manualExample, '```');
   }

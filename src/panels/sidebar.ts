@@ -296,6 +296,17 @@ send({ type: 'ready' });
 export class SidebarProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'pythonCamp.sidebar';
   private view?: vscode.WebviewView;
+  /**
+   * 已经接好监听的那个 view。
+   *
+   * ★ 为什么要记它：VS Code 可能对**同一个 view 对象**再次调用 resolveWebviewView
+   * （视图被折叠再展开、面板被拖动、布局变化等）。早期实现每次进来都注册一个新的
+   * `onDidReceiveMessage`，于是**一条消息被处理两次** ——
+   * 学生点一次「提交并批改」，会同时跑两个 AI 批改（用户实测：同一关的两次成绩
+   * 只差 3~7 秒、结论还不一样）。这里做成幂等，并在重新接监听前先释放旧的。
+   */
+  private wired?: vscode.WebviewView;
+  private disposables: vscode.Disposable[] = [];
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -307,6 +318,22 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
   resolveWebviewView(view: vscode.WebviewView): void {
     this.view = view;
+
+    // 同一个 view 重复 resolve：只刷新，绝不重复注册监听
+    if (this.wired === view) {
+      this.refresh();
+      return;
+    }
+    for (const d of this.disposables) {
+      try {
+        d.dispose();
+      } catch {
+        /* ignore */
+      }
+    }
+    this.disposables = [];
+    this.wired = view;
+
     view.webview.options = {
       enableScripts: true,
       localResourceRoots: [this.extensionUri],
@@ -320,20 +347,25 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       script: SCRIPT,
     });
 
-    view.webview.onDidReceiveMessage((msg: WebviewMessage) => {
-      if (msg?.type === 'ready') {
-        this.refresh();
-        return;
-      }
-      void this.onMessage(msg);
-    });
+    this.disposables.push(
+      view.webview.onDidReceiveMessage((msg: WebviewMessage) => {
+        if (msg?.type === 'ready') {
+          this.refresh();
+          return;
+        }
+        void this.onMessage(msg);
+      })
+    );
 
-    view.onDidChangeVisibility(() => {
-      this.onVisibilityChange?.(view.visible);
-      if (view.visible) {
-        this.refresh();
-      }
-    });
+    this.disposables.push(
+      view.onDidChangeVisibility(() => {
+        this.onVisibilityChange?.(view.visible);
+        if (view.visible) {
+          this.refresh();
+        }
+      })
+    );
+
     this.onVisibilityChange?.(view.visible);
     this.refresh();
   }

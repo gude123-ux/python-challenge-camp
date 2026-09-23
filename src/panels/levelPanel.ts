@@ -45,6 +45,10 @@ details.acc > summary { cursor: pointer; font-size: 11.5px; color: var(--vscode-
 .busy { display: inline-block; margin-left: 8px; font-size: 11.5px; color: var(--vscode-descriptionForeground); }
 .hist { font-size: 11px; display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
 .hist .h { padding: 2px 7px; border-radius: 5px; background: rgba(127,127,127,.16); }
+.lesson { margin-bottom: 12px; }
+.lesson .lh { font-weight: 600; font-size: 12.5px; margin: 8px 0 4px; }
+.lesson .lt { font-size: 12.5px; line-height: 1.75; }
+.lesson pre.code { margin-top: 6px; }
 `;
 
 const SCRIPT = String.raw`
@@ -149,7 +153,22 @@ function render() {
 
   h += '<div class="pathbar">代码文件：' + esc(S.filePath || '（尚未创建）') + '</div>';
 
-  h += '<h3 class="blk">知识点简述</h3><ul class="kn">' +
+  // ★ 本关讲解：学生只看这一页就该知道怎么动手。
+  //   旧题库的知识点是 PDF 换行切碎的半句，读不懂（用户实测反馈过），
+  //   所以这里优先渲染结构化的讲义（小标题 + 完整段落 + 配套代码）。
+  const lesson = L.lesson || [];
+  if (lesson.length) {
+    h += '<h3 class="blk">本关讲解</h3>';
+    lesson.forEach(function (b) {
+      h += '<div class="lesson">';
+      if (b.heading) h += '<div class="lh">' + esc(b.heading) + '</div>';
+      if (b.text) h += '<div class="lt">' + esc(b.text) + '</div>';
+      if (b.code) h += '<pre class="code">' + esc(b.code) + '</pre>';
+      h += '</div>';
+    });
+  }
+
+  h += '<h3 class="blk">知识点速览</h3><ul class="kn">' +
     L.knowledge.map(function (k) { return '<li>' + esc(k) + '</li>'; }).join('') + '</ul>';
 
   if (L.manualExample) {
