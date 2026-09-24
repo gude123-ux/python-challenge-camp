@@ -162,6 +162,20 @@ async function main() {
   const badKb = kbCmds.filter((c) => !declaredCmds.includes(c));
   ok(badKb.length === 0, '快捷键绑定的命令都已声明', badKb.join(','));
 
+  // ★ 侧边栏标题栏不要再放「批量补交」按钮：
+  //   那是全插件唯一会一次批改多关的入口，放在标题栏上极易被当成「提交并批改」，
+  //   用户实测就误点过（"点一个批改，结果好几关都在批"）。
+  const titleMenu = (pkg.contributes?.menus?.['view/title'] ?? []).map((m) => m.command);
+  ok(
+    !titleMenu.includes('pythonCamp.submitPending'),
+    '侧边栏标题栏没有「批量补交」按钮（避免被误当成单关提交）',
+    titleMenu.join(',')
+  );
+  ok(
+    declaredCmds.includes('pythonCamp.submitPending'),
+    '批量补交命令仍然保留（面板卡片 / 命令面板可用）'
+  );
+
   // menus 引用的命令必须存在
   const menuCmds = [];
   for (const group of Object.values(pkg.contributes?.menus ?? {})) {
@@ -191,6 +205,9 @@ async function main() {
   ok(bundleText.includes('本关讲解'), '打包产物含「本关讲解」渲染（学生能直接看到讲义）');
   ok(bundleText.includes('知识点速览'), '打包产物含「知识点速览」渲染');
   ok(bundleText.includes('正在批改中'), '打包产物含批改防重入提示（点一次只跑一个批改）');
+  ok(bundleText.includes('批改进度'), '打包产物含「批改进度」可视化（逐步显示，不再是静止的一句话）');
+  ok(bundleText.includes('已等待'), '打包产物含「已等待 N 秒」提示');
+  ok(bundleText.includes('参考答案与改进建议'), '打包产物含批改后的「参考答案与改进建议」区块');
 
   console.log('\n=== F. 激活期副作用 ===');
   ok(stub.__state.registeredViews.length > 0, 'activate 期间注册了侧边栏');
@@ -318,6 +335,18 @@ function checkLauncher(root, workRoot) {
   // 6) 有失败兜底（pause + 打印日志），否则双击后窗口一闪而过看不到错误
   ok(/\bpause\b/i.test(text), '失败路径有 pause（双击时能看到报错）');
   ok(/python-camp-launch\.log/.test(text), '失败时会写出诊断日志');
+
+  // 动态校验要启动子进程。受限环境（沙箱 / 安全软件）可能只拦**同步**启动，
+  // 返回 EBUSY —— 那是环境限制，不是启动器坏了，所以明确跳过而不是报失败。
+  const probe = require('child_process').spawnSync(process.execPath, ['--version'], {
+    encoding: 'utf8',
+  });
+  if (probe.error) {
+    console.log(
+      `  - 本环境禁止同步启动子进程（${probe.error.code}），跳过启动器的动态校验（静态校验已通过）`
+    );
+    return;
+  }
 
   // 7) launch.js 语法可解析
   const syntax = require('child_process').spawnSync(process.execPath, ['--check', jsPath], {

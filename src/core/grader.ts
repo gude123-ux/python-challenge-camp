@@ -440,6 +440,21 @@ export function normalizeAiResult(raw: string, level: Level): GradeResult | null
 }
 
 /**
+/**
+ * 批改完之后，要不要顺手把参考答案也生成出来？
+ *
+ * 用户的要求是「AI 改完要给出参考答案和建议」——但参考答案是**另一次模型调用**，
+ * 每次提交都生成会翻倍烧 token。所以定成：**没过关、或有题目没做出来**时才自动生成；
+ * 全对且过关的只给评语与建议（想细看可以手动点「AI 讲解本关」）。
+ */
+export function shouldAutoAnswer(result: GradeResult, passScore: number): boolean {
+  if (result.score < passScore) {
+    return true;
+  }
+  return result.exerciseChecks.some((c) => !c.done);
+}
+
+/**
  * 本地启发式评分：没有 AI 时的兜底，只做「能跑 + 有内容 + 有注释」的粗判。
  *
  * terminal 是学生在集成终端里的运行证据。为什么必须传进来：

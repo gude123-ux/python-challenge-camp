@@ -136,19 +136,41 @@ function findNpmCli() {
   return null;
 }
 
-function runNpm(npmArgs) {
+/**
+ * 异步执行子进程并等它结束（返回 {status, stdout, stderr, error}）。
+ *
+ * 为什么不用 spawnSync：受限环境（沙箱 / 安全软件）可能**只拦同步启动**子进程，
+ * 直接返回 EBUSY —— 表现出来就是"编译失败""安装失败"这类误报（本机实测遇到过，
+ * 同一个命令换成异步 spawn 就正常）。所以这里统一走异步。
+ */
+function runAsync(cmd, args, opts = {}) {
+  return new Promise((resolve) => {
+    let child;
+    try {
+      child = spawn(cmd, args, { ...opts, stdio: opts.stdio ?? 'pipe' });
+    } catch (err) {
+      resolve({ status: null, error: err, stdout: '', stderr: String(err && err.message) });
+      return;
+    }
+    let stdout = '';
+    let stderr = '';
+    if (child.stdout) child.stdout.on('data', (d) => { stdout += d.toString(); });
+    if (child.stderr) child.stderr.on('data', (d) => { stderr += d.toString(); });
+    child.on('error', (err) => resolve({ status: null, error: err, stdout, stderr }));
+    child.on('close', (code) => resolve({ status: code, stdout, stderr }));
+  });
+}
+
+async function runNpm(npmArgs) {
   const cli = findNpmCli();
   if (cli) {
-    return spawnSync(process.execPath, [cli, ...npmArgs], {
-      cwd: ROOT,
-      stdio: 'inherit',
-    });
+    return runAsync(process.execPath, [cli, ...npmArgs], { cwd: ROOT, stdio: 'inherit' });
   }
   const npmCmd = which('npm') || which('npm.cmd');
   if (!npmCmd) {
     return { status: 1, error: new Error('找不到 npm') };
   }
-  return spawnSync(npmCmd, npmArgs, { cwd: ROOT, stdio: 'inherit', shell: true });
+  return runAsync(npmCmd, npmArgs, { cwd: ROOT, stdio: 'inherit', shell: true });
 }
 
 // ------------------------------------------------------------------ 步骤 1：Node
@@ -168,7 +190,7 @@ function checkNode() {
 
 // ------------------------------------------------------------------ 步骤 2：依赖
 
-function ensureDeps() {
+async function ensureDeps() {
   const esbuild = path.join(ROOT, 'node_modules', 'esbuild', 'package.json');
   if (exists(esbuild)) {
     good('依赖已就绪，跳过安装');
@@ -176,7 +198,7 @@ function ensureDeps() {
   }
   warn('首次运行，需要安装依赖（约 1 分钟，只会做这一次）…');
   out('');
-  const r = runNpm(['install', '--no-audit', '--no-fund']);
+  const r = await runNpm(['install', '--no-audit', '--no-fund']);
   out('');
   if (r.status !== 0) {
     return fail(
@@ -194,11 +216,9 @@ function ensureDeps() {
 
 // ------------------------------------------------------------------ 步骤 3：编译
 
-function build() {
-  const r = spawnSync(process.execPath, [path.join(ROOT, 'esbuild.js')], {
+async function build() {
+  const r = await runAsync(process.execPath, [path.join(ROOT, 'esbuild.js')], {
     cwd: ROOT,
-    stdio: 'pipe',
-    encoding: 'utf8',
   });
   const bundle = path.join(ROOT, 'out', 'extension.js');
   if (r.status !== 0 || !exists(bundle)) {
@@ -429,7 +449,7 @@ function launch(editor, workspace, extraArgs) {
  * 每次都跑一遍 vsce 会让启动慢十几秒。改了代码就顺手把 package.json 的
  * version 抬一下（或者用 --install 强制重装）。
  */
-function ensureInstalled(editor) {
+async function ensureInstalled(editor) {
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   const cur = installedVersion();
   if (cur && cur.version === pkg.version && !flag('--install')) {
@@ -444,7 +464,7 @@ function ensureInstalled(editor) {
   return packageAndInstall(editor);
 }
 
-function packageAndInstall(editor) {
+async function packageAndInstall(editor) {
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   const vsix = path.join(ROOT, `${pkg.name}-${pkg.version}.vsix`);
 
@@ -466,7 +486,7 @@ function packageAndInstall(editor) {
 
   if (needPack) {
     info('打包 vsix…');
-    const r = runNpm(['exec', '--yes', '--', '@vscode/vsce', 'package', '--no-dependencies', '--allow-missing-repository']);
+    const r = await runNpm(['exec', '--yes', '--', '@vscode/vsce', 'package', '--no-dependencies', '--allow-missing-repository']);
     if (r.status !== 0 || !exists(vsix)) {
       warn('打包失败（可能是网络问题），改用开发宿主模式启动');
       return false;
@@ -481,9 +501,7 @@ function packageAndInstall(editor) {
   // 非 .exe（如 PATH 里的 .cmd）才走 shell 并显式加引号。
   const cli = editor.exe || editor.cmd;
   const useShell = !/\.exe$/i.test(cli);
-  const r = spawnSync(useShell ? `"${cli}"` : cli, ['--install-extension', vsix, '--force'], {
-    stdio: 'pipe',
-    encoding: 'utf8',
+  const r = await runAsync(useShell ? `"${cli}"` : cli, ['--install-extension', vsix, '--force'], {
     shell: useShell,
   });
   const output = `${r.stdout || ''}${r.stderr || ''}`.trim();
@@ -574,7 +592,7 @@ function runCheck() {
 
 // ------------------------------------------------------------------ main
 
-function main() {
+async function main() {
   logLine(`--- launch.js start args=${JSON.stringify(args)} node=${process.versions.node}`);
 
   if (flag('--help') || flag('-h')) {
@@ -608,12 +626,12 @@ function main() {
   }
 
   step(2, 5, '检查依赖');
-  if (!ensureDeps()) {
+  if (!(await ensureDeps())) {
     return;
   }
 
   step(3, 5, '编译插件');
-  if (!build()) {
+  if (!(await build())) {
     return;
   }
 
@@ -662,7 +680,7 @@ function main() {
   if (devMode) {
     extraArgs = [`--extensionDevelopmentPath=${ROOT}`];
     info('开发宿主模式：会新开一个「扩展开发宿主」窗口（调试用，进度与普通窗口共享）');
-  } else if (ensureInstalled(editor)) {
+  } else if (await ensureInstalled(editor)) {
     extraArgs = [];
     info('以已安装插件的方式启动（不会新开额外窗口）');
   } else {
@@ -692,4 +710,9 @@ function main() {
   logLine(`LAUNCH ok editor=${editor.exe || editor.cmd} workspace=${workspace} args=${JSON.stringify(extraArgs)}`);
 }
 
-main();
+// main 现在是 async（子进程统一走异步 spawn，见 runAsync 的说明），
+// 所以必须自己接住异常，否则双击启动失败时窗口会一闪而过、什么都看不到。
+main().catch((err) => {
+  fail('启动器异常退出', String((err && err.stack) || err));
+  logLine(`LAUNCH error ${String((err && err.message) || err)}`);
+});

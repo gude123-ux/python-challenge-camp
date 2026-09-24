@@ -49,6 +49,20 @@ details.acc > summary { cursor: pointer; font-size: 11.5px; color: var(--vscode-
 .lesson .lh { font-weight: 600; font-size: 12.5px; margin: 8px 0 4px; }
 .lesson .lt { font-size: 12.5px; line-height: 1.75; }
 .lesson pre.code { margin-top: 6px; }
+/* 批改进度：每一步一行，带状态图标 —— 取代过去那句静止的「判分中…」 */
+.progbox { border-radius: 9px; padding: 10px 12px; margin-top: 12px;
+  border: 1px solid var(--vscode-panel-border, rgba(127,127,127,.3)); background: rgba(127,127,127,.06); }
+.progbox .ttl { font-weight: 600; font-size: 12px; margin-bottom: 6px; }
+.progbox .steps { font-size: 11.5px; }
+.progbox .step { display: flex; gap: 7px; padding: 2px 0; color: var(--vscode-descriptionForeground); }
+.progbox .step .ic { flex: 0 0 14px; text-align: center; }
+.progbox .step.done { color: var(--vscode-foreground); }
+.progbox .step.done .ic { color: var(--vscode-charts-green, #3caa6e); }
+.progbox .step.running { color: var(--vscode-foreground); font-weight: 600; }
+.progbox .step.failed .ic { color: var(--vscode-charts-red, #dc5050); }
+.progbox .note { font-size: 11px; color: var(--vscode-descriptionForeground); margin-top: 6px; }
+.progbox .barwrap { height: 3px; border-radius: 2px; background: rgba(127,127,127,.22); margin-top: 8px; overflow: hidden; }
+.progbox .barwrap i { display: block; height: 100%; background: var(--vscode-progressBar-background, #2f7fe0); transition: width .3s; }
 `;
 
 const SCRIPT = String.raw`
@@ -120,6 +134,37 @@ function runBlock(r) {
   return h;
 }
 
+// ★ 批改进度：每一步一行 + 进度条 + 已等待秒数。
+//   过去只有一句「正在批改…」，卡住时用户完全不知道走到哪一步了。
+function progressInner() {
+  if (!S.progress || !S.progress.length) return '';
+  const done = S.progress.filter(function (x) { return x.state === 'done' || x.state === 'failed' || x.state === 'skipped'; }).length;
+  const pct = Math.round(done / S.progress.length * 100);
+  let h = '<div class="ttl">批改进度 <span class="muted" style="font-weight:400">' + done + '/' + S.progress.length + '</span></div><div class="steps">';
+  S.progress.forEach(function (x) {
+    const ic = x.state === 'done' ? '\u2713' : x.state === 'running' ? '\u25CF' : x.state === 'failed' ? '\u2717' : x.state === 'skipped' ? '\u2013' : '\u25CB';
+    h += '<div class="step ' + x.state + '"><span class="ic">' + ic + '</span><span>' + esc(x.label) + '</span></div>';
+  });
+  h += '</div><div class="barwrap"><i style="width:' + pct + '%"></i></div>';
+  if (S.progressNote) h += '<div class="note">' + esc(S.progressNote) + '</div>';
+  return h;
+}
+
+function progressBlock() {
+  if (!S.progress || !S.progress.length) return '';
+  return '<div class="progbox" id="progbox">' + progressInner() + '</div>';
+}
+
+function answerBlock() {
+  if (S.answerPending) {
+    return '<h3 class="blk">参考答案与改进建议</h3><div class="card"><div class="muted">正在生成参考答案…（推理模型可能要几十秒）</div></div>';
+  }
+  if (!S.answerHtml) return '';
+  return '<h3 class="blk">参考答案与改进建议</h3>' +
+    (S.answerNote ? '<div class="muted" style="font-size:11px;margin-bottom:6px">' + esc(S.answerNote) + '</div>' : '') +
+    '<div class="card md">' + S.answerHtml + '</div>';
+}
+
 function render() {
   if (!S) return;
   const L = S.level;
@@ -152,6 +197,8 @@ function render() {
     '</div>';
 
   h += '<div class="pathbar">代码文件：' + esc(S.filePath || '（尚未创建）') + '</div>';
+
+  h += progressBlock();
 
   // ★ 本关讲解：学生只看这一页就该知道怎么动手。
   //   旧题库的知识点是 PDF 换行切碎的半句，读不懂（用户实测反馈过），
@@ -196,6 +243,7 @@ function render() {
 
   if (S.run) h += runBlock(S.run);
   if (S.grade) h += gradeBlock(S.grade);
+  h += answerBlock();
   h += '</div>';
   document.getElementById('root').innerHTML = h;
 }
@@ -210,6 +258,19 @@ window.addEventListener('message', function (e) {
   const m = e.data;
   if (!m) return;
   if (m.type === 'state') { S = m.model; render(); }
+  // 进度只更新那一小块，避免整页重绘（重绘会丢滚动位置）
+  if (m.type === 'progress') {
+    if (!S) return;
+    S.progress = m.steps;
+    S.progressNote = m.note;
+    const box = document.getElementById('progbox');
+    if (box) {
+      if (!m.steps || !m.steps.length) { box.remove(); return; }
+      box.innerHTML = progressInner();
+    } else {
+      render();
+    }
+  }
   if (m.type === 'busy') {
     let b = document.getElementById('busy');
     if (!b) {
@@ -230,13 +291,22 @@ export class LevelPanel {
   private readonly panel: vscode.WebviewPanel;
   private disposables: vscode.Disposable[] = [];
   private model: LevelDetailModel | null = null;
+  /**
+   * 当前面板要响应的是哪一关。
+   *
+   * ★ 面板是单例（复用它避免每次开新标签页），但**回调不能只绑第一次那一关**：
+   * 早期实现只在构造函数里记下 onAction，于是先打开第 5 关、再切到第 7 关时，
+   * 面板上的按钮仍然作用在第 5 关 —— 点「提交并批改」会批改错误的关卡。
+   */
+  private onAction: (type: string) => void | Promise<void>;
 
   private constructor(
     panel: vscode.WebviewPanel,
     extensionUri: vscode.Uri,
-    private readonly onAction: (type: string) => void | Promise<void>
+    onAction: (type: string) => void | Promise<void>
   ) {
     this.panel = panel;
+    this.onAction = onAction;
     this.panel.webview.options = {
       enableScripts: true,
       localResourceRoots: [extensionUri],
@@ -271,6 +341,8 @@ export class LevelPanel {
     onAction: (type: string) => void | Promise<void>
   ): LevelPanel {
     if (LevelPanel.current) {
+      // 复用已有面板：必须把回调换成「当前这一关」的，否则按钮会作用在上一关
+      LevelPanel.current.onAction = onAction;
       LevelPanel.current.panel.reveal(vscode.ViewColumn.Beside, true);
       return LevelPanel.current;
     }
@@ -289,6 +361,22 @@ export class LevelPanel {
     this.model = model;
     this.panel.title = `第 ${model.level.day} 关 · ${model.level.title}`;
     this.push();
+  }
+
+  /**
+   * 推送批改进度（每一步一行 + 已等待秒数）。
+   * 只更新页面里那一小块，不整页重绘 —— 否则滚动位置会被重置。
+   */
+  setProgress(
+    steps: Array<{ label: string; state: 'pending' | 'running' | 'done' | 'failed' | 'skipped' }>,
+    note?: string
+  ): void {
+    void this.panel.webview.postMessage({ type: 'progress', steps, note: note ?? '' });
+  }
+
+  /** 清掉进度块（批改结束） */
+  clearProgress(): void {
+    void this.panel.webview.postMessage({ type: 'progress', steps: [], note: '' });
   }
 
   /** 显示"正在批改…"这类临时状态 */

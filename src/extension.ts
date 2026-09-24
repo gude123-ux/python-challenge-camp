@@ -22,7 +22,8 @@ import { runFile } from './core/runner';
 import { TerminalRecorder } from './core/terminal';
 import { scanPendingSubmissions } from './core/pending';
 import type { PendingLevel } from './core/pending';
-import { gradeCode, promptAiSetup, extractJson } from './core/grader';
+import { withDeadline, withTicker, DeadlineError } from './util/deadline';
+import { gradeCode, promptAiSetup, extractJson, shouldAutoAnswer } from './core/grader';
 import {
   generateLevelAnswer,
   generateErrorDiagnosis,
@@ -77,9 +78,18 @@ let chatDisplay: ChatMessageModel[] = [];
 
 /** 当前正在操作的关卡 */
 let currentLevelId: string | undefined;
-/** 最近一次批改结果（用于详情页展示） */
+/**
+ * 最近一次批改结果 / 运行结果（用于详情页展示）。
+ *
+ * ★ 必须记住是「哪一关」的：面板是单例，换关时如果还拿着上一关的成绩，
+ * 学生就会在第 7 关看到第 5 关的分数 —— 比不显示更糟。
+ */
 let lastGrade: GradeResult | null = null;
+let lastGradeLevelId: string | undefined;
 let lastRun: RunResult | null = null;
+let lastRunLevelId: string | undefined;
+/** 最近一次生成的参考答案（跟关卡绑定，换关就不显示） */
+let lastAnswer: { levelId: string; markdown: string; note: string } | null = null;
 /**
  * 「写了代码但没提交批改」的关卡（缓存）。
  *
@@ -371,7 +381,7 @@ function registerCommands(context: vscode.ExtensionContext): void {
     if (!target) {
       return;
     }
-    await submitLevel(target.level, context, target.document);
+    await submitLevel(target.level, context, target.document, { source: 'command' });
   });
 
   reg('pythonCamp.runCurrentFile', async () => {
@@ -505,9 +515,9 @@ async function ensureLevelFile(context: vscode.ExtensionContext, level: Level): 
 /** 打开某一关：建文件 → 打开编辑器 → 打开详情页 */
 async function openLevel(level: Level, context: vscode.ExtensionContext): Promise<void> {
   currentLevelId = level.id;
-  lastGrade = null;
-  lastRun = null;
-  lastDiagnosis = null;
+  // 批改结果 / 运行结果 / 报错分析 / 参考答案现在都**按关卡作用域**保存，
+  // 所以换关时不需要清空 —— 回到某一关还能看到它上次的成绩与答案，
+  // 也不会出现「在第 7 关看到第 5 关分数」的串档问题。
   chatPanel?.setContext(chatContextLabel(level));
 
   const uri = await ensureLevelFile(context, level);
@@ -534,11 +544,18 @@ function showLevelPanel(level: Level, context: vscode.ExtensionContext, reveal =
   // 报错分析只对「它所属的那一关」有效，换关就不要再显示上一关的结论
   const diagnosis =
     lastDiagnosis && lastDiagnosis.levelId === level.id ? lastDiagnosis.markdown : null;
-  const model = vmb.buildLevelDetail(level, cfg, exists, lastGrade, lastRun, diagnosis);
+  const gradeForLevel = lastGradeLevelId === level.id ? lastGrade : null;
+  const runForLevel = lastRunLevelId === level.id ? lastRun : null;
+  const model = vmb.buildLevelDetail(level, cfg, exists, gradeForLevel, runForLevel, diagnosis);
   model.filePath = uri.fsPath;
   const pending = pendingLevels.find((x) => x.levelId === level.id);
   if (pending) {
     model.pendingLines = pending.codeLines;
+  }
+  // 参考答案跟关卡绑定：切到别的关就不显示上一关的答案
+  if (lastAnswer && lastAnswer.levelId === level.id) {
+    model.answerHtml = renderMarkdown(lastAnswer.markdown);
+    model.answerNote = lastAnswer.note;
   }
   panel.setModel(model);
   if (reveal) {
@@ -563,7 +580,7 @@ async function handlePanelAction(
       await runLevel(level, context);
       break;
     case 'submit':
-      await submitLevel(level, context);
+      await submitLevel(level, context, undefined, { source: 'panel' });
       break;
     case 'answer':
       await explainLevel(level, context);
@@ -637,6 +654,7 @@ async function runLevelInner(
         timeoutSec: cfg.runTimeoutSec,
       });
       lastRun = result;
+      lastRunLevelId = level.id;
       showLevelPanel(level, context);
 
       if (result.noInterpreter) {
@@ -707,21 +725,29 @@ async function submitPendingLevels(context: vscode.ExtensionContext): Promise<vo
     return;
   }
   const list = targets.map((l) => `第 ${l.day} 关`).join('、');
+  // ★ 这是全插件唯一会「一次操作批改多关」的入口，所以必须说清：
+  //   批哪几关、要跑几次模型、大概多久。用户曾经把这里误当成"提交并批改"，
+  //   于是看到"点一下，好几关都在批"。
   const pick = await vscode.window.showWarningMessage(
-    `这 ${targets.length} 关的文件里有你写的代码，但一次都没提交过批改：${list}。现在依次提交吗？`,
+    `将依次批改 ${targets.length} 关：${list}。\n` +
+      `每一关都会单独调用一次模型判分（约 ${targets.length} 次），要花点时间。确定开始吗？`,
     { modal: true },
-    '开始补交'
+    `开始补交 ${targets.length} 关`
   );
-  if (pick !== '开始补交') {
+  if (!pick) {
     return;
   }
+  let done = 0;
   for (const level of targets) {
+    done += 1;
     currentLevelId = level.id;
+    aiLog.appendLine(`[补交] ${done}/${targets.length} · ${level.id}`);
     // quiet：批量模式下不弹「进入下一关」那种需要点确认的对话框，否则会卡住
-    await submitLevel(level, context, undefined, true);
+    await submitLevel(level, context, undefined, { quiet: true, source: 'batch' });
   }
   await refreshPending();
   sidebar.refresh();
+  void vscode.window.showInformationMessage(`补交完成：已依次处理 ${done} 关。`);
 }
 
 /**
@@ -735,25 +761,60 @@ async function submitPendingLevels(context: vscode.ExtensionContext): Promise<vo
 const gradingInFlight = new Set<string>();
 const runningInFlight = new Set<string>();
 
+/** 批改进度里的一步 */
+interface GradeStep {
+  label: string;
+  state: 'pending' | 'running' | 'done' | 'failed' | 'skipped';
+}
+
+interface SubmitOpts {
+  /** 批量补交时为 true：不弹需要用户点确认的对话框 */
+  quiet?: boolean;
+  /** 触发来源，只用于日志（panel / sidebar / command / batch / retry） */
+  source?: string;
+}
+
+/** 全局串行：同一时刻只允许一个批改在跑 */
+let gradingBusy = false;
+
 /** 提交并批改某一关的代码 */
 async function submitLevel(
   level: Level,
   context: vscode.ExtensionContext,
   document?: vscode.TextDocument,
-  /** 批量补交时为 true：不弹需要用户点确认的对话框 */
-  quiet = false
+  opts: SubmitOpts = {}
 ): Promise<void> {
+  const quiet = opts.quiet === true;
+  const source = opts.source ?? 'unknown';
+
   if (gradingInFlight.has(level.id)) {
     if (!quiet) {
       void vscode.window.showInformationMessage(`第 ${level.day} 关正在批改中，请稍等它跑完。`);
     }
     return;
   }
+  // ★ 全局串行：防止「批量补交」和「单关提交」叠加，也防止用户连点导致并发批改。
+  //   用户曾经看到过"点一个批改，结果好几关都在批"——那条路径只可能是批量补交，
+  //   这里再上一道闸门，让「一次点击 = 一个批改」永远成立。
+  if (gradingBusy) {
+    if (!quiet) {
+      void vscode.window.showInformationMessage('已经有一个批改在进行中，等它跑完再提交这一关。');
+    }
+    return;
+  }
+
   gradingInFlight.add(level.id);
+  gradingBusy = true;
+  const startedAt = Date.now();
+  aiLog.appendLine(`[批改] 开始 · ${level.id} 第 ${level.day} 关 · 触发来源=${source}`);
   try {
     await submitLevelInner(level, context, document, quiet);
   } finally {
     gradingInFlight.delete(level.id);
+    gradingBusy = false;
+    aiLog.appendLine(
+      `[批改] 结束 · ${level.id} · 总用时 ${Math.round((Date.now() - startedAt) / 1000)} 秒`
+    );
   }
 }
 
@@ -765,6 +826,43 @@ async function submitLevelInner(
 ): Promise<void> {
   const cfg = readConfig();
   const uri = document?.uri ?? levelFileUri(context, level);
+
+  // 步骤表：既是面板上的可视化进度，也是通知栏文案的来源。
+  // 过去只有一句「正在批改…」，卡住时用户完全不知道走到哪一步了。
+  const steps: GradeStep[] = [
+    { label: '读取并保存代码文件', state: 'pending' },
+    {
+      label: cfg.autoRunBeforeGrade ? '本地运行检查（真实退出码 / traceback）' : '本地运行（已关闭，跳过）',
+      state: 'pending',
+    },
+    {
+      label: cfg.terminalContext ? '收集集成终端里的运行记录' : '终端记录（已关闭，跳过）',
+      state: 'pending',
+    },
+    {
+      label: cfg.enableAI && aiReady(cfg) ? '交给模型判分' : '本地启发式评分（未启用 AI）',
+      state: 'pending',
+    },
+    { label: '解析结果并写入进度', state: 'pending' },
+    { label: '生成参考答案与改进建议', state: 'pending' },
+  ];
+  const idx = {
+    read: 0,
+    run: 1,
+    term: 2,
+    grade: 3,
+    save: 4,
+    answer: 5,
+  };
+  let progressRef: vscode.Progress<{ message?: string; increment?: number }> | undefined;
+  const setStep = (i: number, state: GradeStep['state']) => {
+    steps[i].state = state;
+  };
+  const publish = (note?: string) => {
+    LevelPanel.current?.setProgress(steps, note);
+    const running = steps.find((s) => s.state === 'running');
+    progressRef?.report({ message: running ? `${running.label}…` : '处理中…' });
+  };
 
   const openDoc = vscode.workspace.textDocuments.find((d) => d.uri.fsPath === uri.fsPath);
   if (openDoc?.isDirty) {
@@ -788,56 +886,148 @@ async function submitLevelInner(
     await promptAiSetup('还没配置 API Key，本次只做本地检查。要不要现在配置？');
   }
 
+  // 总时限：AI 调用本身有超时，这里再兜一层，保证界面一定能收尾。
+  // 取「单次超时 × 2（可能重试一次）+ 60 秒缓冲」；纯本地检查给 60 秒。
+  const capMs = aiReady(cfg) ? (cfg.aiTimeoutSec * 2 + 60) * 1000 : 60_000;
+
+  // 先把关卡页打开（不抢焦点），这样「批改进度」的每一步学生都能看到
+  showLevelPanel(level, context);
+
   await vscode.window.withProgress(
     {
       location: vscode.ProgressLocation.Notification,
       title: `正在批改第 ${level.day} 关…`,
-      cancellable: false,
+      // 可取消：AI 卡住时用户能自己中止，而不是干等
+      cancellable: true,
     },
-    async (progress) => {
+    async (progress, token) => {
+      progressRef = progress;
+      setStep(idx.read, 'running');
+      publish();
+      setStep(idx.read, 'done');
+
+      let cancelled = false;
       let run: RunResult | null = null;
-      if (cfg.autoRunBeforeGrade) {
-        progress.report({ message: '本地运行检查…' });
-        run = await runFile(uri.fsPath, {
-          pythonPath: cfg.pythonPath,
-          timeoutSec: cfg.runTimeoutSec,
+      // 用「容器对象」而不是裸 let：pipeline 是在闭包里赋值的，
+      // 裸 let 会被 TS 的控制流分析窄化成 never（编译报错）。
+      const holder: { result: GradeResult | null; aiError?: string } = { result: null };
+
+      const pipeline = async (): Promise<void> => {
+        if (cfg.autoRunBeforeGrade) {
+          setStep(idx.run, 'running');
+          publish();
+          run = await runFile(uri.fsPath, {
+            pythonPath: cfg.pythonPath,
+            timeoutSec: cfg.runTimeoutSec,
+          });
+          setStep(idx.run, 'done');
+        } else {
+          setStep(idx.run, 'skipped');
+        }
+        lastRun = run;
+        lastRunLevelId = level.id;
+
+        // 终端证据：学生可能自己在集成终端里跑过（课程材料里有些练习就是这么做的）
+        setStep(idx.term, 'running');
+        publish();
+        const terminal = cfg.terminalContext ? terminalRecorder.context() : '';
+        setStep(idx.term, terminal ? 'done' : 'skipped');
+        aiLog.appendLine(
+          `[批改] ${level.id} 本地运行=${run ? (run.ok ? '成功' : '失败') : '未运行'} · 终端记录 ${
+            terminal ? `${terminal.length} 字符` : '无'
+          }`
+        );
+
+        setStep(idx.grade, 'running');
+        publish('已等待 0 秒…');
+        const grading = gradeCode(level, code, run, {
+          apiKey: cfg.apiKey,
+          apiBaseUrl: cfg.apiBaseUrl,
+          model: cfg.model,
+          enableAI: aiReady(cfg),
+          strictMode: cfg.strictMode,
+          weakPoints: store.weakRanking(5).map((w) => w.tag),
+          maxTokens: cfg.maxTokens,
+          timeoutSec: cfg.aiTimeoutSec,
+          retryOnBadJson: cfg.retryOnBadJson,
+          terminal,
         });
+        // 每秒刷新「已等待 N 秒」，让卡住时也能看出是在等模型
+        const outcome = await withTicker(grading, 1000, (ms) => {
+          if (token.isCancellationRequested) {
+            return;
+          }
+          publish(`已等待 ${Math.round(ms / 1000)} 秒…（模型响应中）`);
+        });
+        setStep(idx.grade, 'done');
+
+        if (token.isCancellationRequested) {
+          cancelled = true;
+          return;
+        }
+        holder.result = outcome.result;
+        holder.aiError = outcome.aiError;
+      };
+
+      try {
+        await withDeadline(pipeline(), capMs, '批改');
+      } catch (err: any) {
+        const isTimeout = err instanceof DeadlineError;
+        const msg = isTimeout
+          ? `批改超时：已等待 ${Math.round(capMs / 1000)} 秒仍未拿到结果，已中止（本次不记成绩）。` +
+            `若经常这样，请检查模型服务是否稳定，或把 pythonCamp.aiTimeoutSec 调小以便更快失败重试。`
+          : `批改过程出错：${String(err?.message ?? err)}`;
+        aiLog.appendLine(`[批改失败] ${level.id}：${msg}`);
+        for (const s of steps) {
+          if (s.state === 'running') {
+            s.state = 'failed';
+          }
+        }
+        publish(msg);
+        LevelPanel.current?.clearProgress();
+        if (!quiet) {
+          const pick = await vscode.window.showWarningMessage(msg, '查看日志', '重试');
+          if (pick === '查看日志') {
+            aiLog.show(true);
+          } else if (pick === '重试') {
+            await submitLevel(level, context, document, { source: 'retry' });
+          }
+        }
+        return;
       }
-      lastRun = run;
 
-      // 终端证据：学生可能自己在集成终端里跑过（课程材料里有些练习就是这么做的）
-      const terminal = cfg.terminalContext ? terminalRecorder.context() : '';
+      if (cancelled || !holder.result) {
+        for (const s of steps) {
+          if (s.state === 'running') {
+            s.state = 'skipped';
+          }
+        }
+        publish('已取消（本次不记成绩）。');
+        LevelPanel.current?.clearProgress();
+        return;
+      }
 
-      progress.report({ message: cfg.enableAI && aiReady(cfg) ? 'AI 判分中…' : '本地评分中…' });
-      const outcome = await gradeCode(level, code, run, {
-        apiKey: cfg.apiKey,
-        apiBaseUrl: cfg.apiBaseUrl,
-        model: cfg.model,
-        enableAI: aiReady(cfg),
-        strictMode: cfg.strictMode,
-        weakPoints: store.weakRanking(5).map((w) => w.tag),
-        maxTokens: cfg.maxTokens,
-        timeoutSec: cfg.aiTimeoutSec,
-        retryOnBadJson: cfg.retryOnBadJson,
-        terminal,
-      });
-
-      const result = outcome.result;
+      const aiError = holder.aiError;
 
       // ★ AI 批改没跑成时（限流 / 网络 / 超时 / 返回被截断…），不要把它当成一次成绩。
       //   否则一次 429 就会给出一份封顶 85 的本地参考分，学生看到"未过关"，
       //   实际上根本没被真正批改过 —— 用户实测就吃过这个亏（AI 打分偏低）。
-      const aiFailed = !!outcome.aiError && aiReady(cfg);
+      const aiFailed = !!aiError && aiReady(cfg);
       if (aiFailed) {
-        const reason = (outcome.aiError ?? '').split('\n')[0];
+        const reason = (aiError ?? '').split('\n')[0];
+        lastGradeLevelId = level.id;
         lastGrade = {
-          ...result,
+          ...holder.result,
           issues: [
             `⚠️ 本次 AI 批改未完成，下面的分数只是本地检查的参考分，**不计入过关判定**。原因：${reason}`,
-            ...result.issues,
+            ...(holder.result?.issues ?? []),
           ],
         };
+        setStep(idx.save, 'skipped');
+        setStep(idx.answer, 'skipped');
+        publish(`AI 批改未完成：${reason}`);
         showLevelPanel(level, context);
+        LevelPanel.current?.clearProgress();
         if (quiet) {
           void vscode.window.showWarningMessage(
             `第 ${level.day} 关：AI 批改未完成（${reason}）。本次不记成绩。`
@@ -851,14 +1041,18 @@ async function submitLevelInner(
           '先不批改'
         );
         if (pick === '重试 AI 批改') {
-          await submitLevel(level, context, document);
+          await submitLevel(level, context, document, { source: 'retry' });
         } else if (pick === '查看日志') {
           aiLog.show(true);
         }
         return;
       }
 
-      lastGrade = result;
+      const r = holder.result;
+      lastGradeLevelId = level.id;
+      lastGrade = r;
+      setStep(idx.save, 'running');
+      publish();
 
       // 落库
       await store.update((p) => {
@@ -872,23 +1066,23 @@ async function submitLevelInner(
           weakTags: [],
         };
         lp.attempts += 1;
-        lp.lastScore = result.score;
-        lp.bestScore = Math.max(lp.bestScore, result.score);
+        lp.lastScore = r.score;
+        lp.bestScore = Math.max(lp.bestScore, r.score);
         lp.lastSubmitAt = new Date().toISOString();
         lp.history.push({
           at: lp.lastSubmitAt,
-          score: result.score,
-          runnable: result.runnable,
-          correctness: result.correctness,
-          quality: result.quality,
-          summary: result.summary,
-          source: result.source,
+          score: r.score,
+          runnable: r.runnable,
+          correctness: r.correctness,
+          quality: r.quality,
+          summary: r.summary,
+          source: r.source,
         });
         if (lp.history.length > 30) {
           lp.history = lp.history.slice(-30);
         }
-        lp.weakTags = Array.from(new Set([...(lp.weakTags ?? []), ...result.weakTags])).slice(-10);
-        if (result.score >= cfg.passScore) {
+        lp.weakTags = Array.from(new Set([...(lp.weakTags ?? []), ...r.weakTags])).slice(-10);
+        if (r.score >= cfg.passScore) {
           lp.status = 'passed';
           lp.passedAt = lp.passedAt ?? new Date().toISOString();
         } else if (lp.status !== 'passed' && lp.bestScore < cfg.passScore) {
@@ -902,23 +1096,65 @@ async function submitLevelInner(
         p.meta.lastLevelId = level.id;
       });
 
-      if (result.weakTags.length) {
-        await store.addWeakPoints(result.weakTags);
+      if (r.weakTags.length) {
+        await store.addWeakPoints(r.weakTags);
       }
 
       // 本次到线、或历史上已经到过线，都算「今日这一关完成」——
       // 否则重刷一次拿低分就会把今日进度抹掉。
       const passed =
-        result.score >= cfg.passScore || store.progress.levels[level.id]?.bestScore >= cfg.passScore;
+        r.score >= cfg.passScore || store.progress.levels[level.id]?.bestScore >= cfg.passScore;
       if (passed) {
         await scheduler.markDoneIfToday(level.id);
+      }
+      setStep(idx.save, 'done');
+
+      // ★ 批改完顺带给参考答案与改进建议（用户要求：改完要能看到答案和建议）
+      //   只在「没过关」或「有题目没做出来」时自动生成；已有缓存就直接用，不重复烧 token。
+      let answerNote = '';
+      if (aiReady(cfg) && shouldAutoAnswer(r, cfg.passScore)) {
+        setStep(idx.answer, 'running');
+        publish('正在生成参考答案…');
+        const file = answerFilePath(context, level);
+        let md: string | null = null;
+        if (existsSync(file)) {
+          try {
+            md = await fs.readFile(file, 'utf8');
+            answerNote = '这份参考答案之前生成过，直接读取本地文件（想重新生成请点「AI 讲解本关」）。';
+          } catch {
+            md = null;
+          }
+        }
+        if (!md) {
+          try {
+            md = await withDeadline(
+              generateLevelAnswer(level, aiTaskOptions(cfg)),
+              capMs,
+              '参考答案生成'
+            );
+            await saveAnswerFile(context, level, md, cfg.model);
+            answerNote = `已保存到 ${path.relative(workDir(context), file)}，下次直接读本地文件。`;
+          } catch (err: any) {
+            answerNote = `参考答案生成失败：${String(err?.message ?? err).split('\n')[0]}（可以点「AI 讲解本关」重试）`;
+            md = null;
+          }
+        }
+        lastAnswer = md ? { levelId: level.id, markdown: md, note: answerNote } : null;
+        setStep(idx.answer, md ? 'done' : 'failed');
+        if (!md && lastAnswer === null) {
+          aiLog.appendLine(`[参考答案] ${level.id} 生成失败：${answerNote}`);
+        }
+      } else {
+        setStep(idx.answer, 'skipped');
+        lastAnswer = null;
       }
 
       showLevelPanel(level, context);
       sidebar.refresh();
       refreshStatusBar();
+      LevelPanel.current?.clearProgress();
 
-      const msg = `第 ${level.day} 关：${result.score} 分${passed ? '，已过关！' : `（过关线 ${cfg.passScore} 分）`}`;
+      const msg = `第 ${level.day} 关：${r.score} 分${passed ? '，已过关！' : `（过关线 ${cfg.passScore} 分）`}`;
       if (quiet) {
         // 批量补交：不弹需要点确认的对话框，否则会卡在第一个关卡上
         void vscode.window.showInformationMessage(msg);
@@ -932,10 +1168,33 @@ async function submitLevelInner(
           await openLevel(next, context);
         }
       } else {
-        void vscode.window.showWarningMessage(msg);
+        void vscode.window.showWarningMessage(
+          `${msg}　已附上参考答案与改进建议，见关卡页底部。`
+        );
       }
     }
   );
+}
+
+/** 把 AI 生成的参考答案落盘（带说明头，方便学生知道出处与时间） */
+async function saveAnswerFile(
+  context: vscode.ExtensionContext,
+  level: Level,
+  markdown: string,
+  model: string
+): Promise<void> {
+  const file = answerFilePath(context, level);
+  const header = [
+    `> 本文件由 AI 生成于 ${new Date().toLocaleString()}，仅供对照学习，不保证唯一解。`,
+    '> 建议先自己写完再打开看，效果差别很大。',
+    '',
+    `**关卡**：第 ${level.day} 关 · ${level.title}　　**模型**：${model}`,
+    '',
+    '---',
+    '',
+  ].join('\n');
+  await fs.mkdir(answerDir(context), { recursive: true });
+  await fs.writeFile(file, `${header}${markdown}\n`, 'utf8');
 }
 
 // ------------------------------------------------------------------ AI 诊断与解答
@@ -1157,27 +1416,13 @@ async function explainLevel(
     },
     async () => {
       try {
-        const md = await generateLevelAnswer(level, {
-          apiKey: cfg.apiKey,
-          apiBaseUrl: cfg.apiBaseUrl,
-          model: cfg.model,
-          maxTokens: cfg.maxTokens,
-          timeoutSec: cfg.aiTimeoutSec,
-        });
+        const md = await generateLevelAnswer(level, aiTaskOptions(cfg));
 
-        const header = [
-          `> 本文件由 AI 生成于 ${new Date().toLocaleString()}，仅供对照学习，不保证唯一解。`,
-          '> 建议先自己写完再打开看，效果差别很大。',
-          '',
-          `**关卡**：第 ${level.day} 关 · ${level.title}　　**模型**：${cfg.model}`,
-          '',
-          '---',
-          '',
-        ].join('\n');
-
-        await fs.mkdir(answerDir(context), { recursive: true });
-        await fs.writeFile(file, `${header}${md}\n`, 'utf8');
+        await saveAnswerFile(context, level, md, cfg.model);
+        // 同步到关卡页的「参考答案与改进建议」，这样手动生成也能在页面上看到
+        lastAnswer = { levelId: level.id, markdown: md, note: '已保存到本地文件。' };
         await openAnswerPreview(file);
+        showLevelPanel(level, context);
         aiLog.appendLine(`[参考答案] 第 ${level.day} 关已生成：${file}`);
         void vscode.window.showInformationMessage(`第 ${level.day} 关参考答案已生成。`);
       } catch (err) {
@@ -1342,6 +1587,7 @@ async function diagnoseError(
           timeoutSec: cfg.runTimeoutSec,
         });
         lastRun = run;
+        lastRunLevelId = level.id;
       }
 
       if (run.noInterpreter) {
@@ -1608,7 +1854,7 @@ async function handleWebviewMessage(
       const lv = curriculum.get(msg.levelId);
       if (lv) {
         currentLevelId = lv.id;
-        await submitLevel(lv, context);
+        await submitLevel(lv, context, undefined, { source: 'sidebar' });
       }
       break;
     }

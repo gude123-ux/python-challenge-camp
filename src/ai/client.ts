@@ -101,9 +101,33 @@ export async function chat(opts: ChatOptions): Promise<ChatResult> {
   const maxTokens = opts.maxTokens ?? 4000;
   const controller = new AbortController();
   const timeoutMs = opts.timeoutMs ?? 120_000;
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const startedAt = Date.now();
+
+  /**
+   * ★ 超时必须覆盖「读到完整响应体」为止。
+   *
+   * 早期实现只在 `await fetch()` 外面挂定时器，一拿到响应头就 `clearTimeout`，
+   * 之后的 `res.text()` **完全没有超时保护** —— 于是当服务端（或中间代理）
+   * 先回了响应头、然后卡住不再吐数据时，这里会永远挂着：
+   * 界面上就是「一直显示正在批改，但永远不出结果」（用户实测反馈的 bug）。
+   */
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+
+  const timeoutError = () =>
+    new AiError(
+      `模型响应超时（已等待 ${Math.round((Date.now() - startedAt) / 1000)} 秒，上限 ${Math.round(
+        timeoutMs / 1000
+      )} 秒）。推理模型通常较慢，可在设置里调大 pythonCamp.aiTimeoutSec；` +
+        `若经常卡住不动，多半是服务端或中转在响应头之后不再返回数据。`,
+      'timeout'
+    );
 
   let res: Response;
+  let text: string;
   try {
     res = await fetch(endpoint, {
       method: 'POST',
@@ -120,23 +144,20 @@ export async function chat(opts: ChatOptions): Promise<ChatResult> {
       }),
       signal: controller.signal,
     });
+    // 注意：这一句也在定时器的保护范围内（见上面的说明）
+    text = await res.text();
   } catch (err: any) {
-    clearTimeout(timer);
-    if (err?.name === 'AbortError') {
-      throw new AiError(
-        `模型响应超时（>${Math.round(timeoutMs / 1000)} 秒）。推理模型通常较慢，可在设置里调大 pythonCamp.aiTimeoutSec。`,
-        'timeout'
-      );
+    if (timedOut || err?.name === 'AbortError') {
+      throw timeoutError();
     }
     throw new AiError(
       `无法连接模型服务：${endpoint}`,
       'network',
       String(err?.message ?? err)
     );
+  } finally {
+    clearTimeout(timer);
   }
-  clearTimeout(timer);
-
-  const text = await res.text();
 
   if (!res.ok) {
     const detail = text.slice(0, 600);

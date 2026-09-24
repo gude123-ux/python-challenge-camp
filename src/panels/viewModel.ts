@@ -101,6 +101,12 @@ export interface LevelDetailModel {
   runFailed: boolean;
   /** 文件里有学生自己写的代码，但一次都没提交过批改（>0 时页面会提示补交） */
   pendingLines?: number;
+  /** 参考答案（**已渲染并转义好的 HTML**）：批改后没过关或有题目没做出来时自动给出 */
+  answerHtml?: string;
+  /** 参考答案正在生成中 */
+  answerPending?: boolean;
+  /** 参考答案的补充说明（例如「已保存到 xxx.md」） */
+  answerNote?: string;
 }
 
 export class ViewModelBuilder {

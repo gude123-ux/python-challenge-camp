@@ -2,7 +2,7 @@
   "name": "python-challenge-camp",
   "displayName": "Python闯关训练营",
   "description": "面向的 Python 学习闯关系统：每日任务派发、关卡解锁、AI 自动批改、进度追踪，全部数据保存在本地工作区。",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "publisher": "gude123-ux",
   "license": "MIT",
   "engines": {
@@ -176,11 +176,6 @@
           "command": "pythonCamp.openConfig",
           "when": "view == pythonCamp.sidebar",
           "group": "navigation@2"
-        },
-        {
-          "command": "pythonCamp.submitPending",
-          "when": "view == pythonCamp.sidebar",
-          "group": "navigation@3"
         }
       ],
       "editor/context": [

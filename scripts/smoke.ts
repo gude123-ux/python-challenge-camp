@@ -20,7 +20,7 @@ import * as path from 'path';
 import { Curriculum } from '../src/core/curriculum';
 import { ProgressStore } from '../src/core/store';
 import { Scheduler } from '../src/core/scheduler';
-import { normalizeAiResult, localGrade, extractJson } from '../src/core/grader';
+import { normalizeAiResult, localGrade, extractJson, shouldAutoAnswer } from '../src/core/grader';
 import {
   buildMessages,
   buildErrorMessages,
@@ -38,6 +38,7 @@ import {
 } from '../src/core/terminal';
 import type { TerminalEntry } from '../src/core/terminal';
 import { countStudentCodeLines, scanPendingSubmissions } from '../src/core/pending';
+import { withDeadline, withTicker, DeadlineError } from '../src/util/deadline';
 import { runFile, runSnippet, checkSyntax } from '../src/core/runner';
 import { todayKey } from '../src/util/paths';
 import type { GradeResult, Level, RunResult } from '../src/core/types';
@@ -751,6 +752,73 @@ async function main(): Promise<void> {
     (level.lesson ?? []).length === 0 || lessonAnswerMsgs[1].content.includes('本关讲义'),
     '参考答案提示词带上了本关讲义'
   );
+
+  // ---------------------------------------------------------- 13. 超时与批改收尾
+  // 背景（用户实测）：「有时候一直显示批改但不出结果」——
+  // 根因是 client.ts 拿到响应头就清了定时器，res.text() 完全没超时保护。
+  // 这里守住两道防线：网络层（不好单测）+ 业务层总时限（可单测）。
+  section('13. 超时兜底与「批改后给答案」的判定');
+
+  const fast = await withDeadline(Promise.resolve('ok'), 500, '测试');
+  ok(fast === 'ok', '没超时的任务原样返回');
+
+  let deadlineErr: unknown = null;
+  try {
+    await withDeadline(new Promise((r) => setTimeout(r, 300)), 50, '批改');
+  } catch (e) {
+    deadlineErr = e;
+  }
+  ok(deadlineErr instanceof DeadlineError, '超过总时限时抛出 DeadlineError（界面一定能收尾）');
+  ok(
+    deadlineErr instanceof DeadlineError && deadlineErr.message.includes('批改'),
+    '超时错误里带上标签，便于告诉用户是哪一步超时'
+  );
+
+  // withTicker：让 UI 能显示「已等待 N 秒」，而不是静止的一句话
+  const ticks: number[] = [];
+  await withTicker(new Promise((r) => setTimeout(r, 120)), 30, (ms) => ticks.push(ms));
+  ok(ticks.length >= 2, 'withTicker 会周期性回调（用于显示已等待秒数）', `${ticks.length} 次`);
+
+  // shouldAutoAnswer：没过关或有题没做出来 → 顺带生成参考答案
+  const mkGrade = (score: number, checks: Array<{ index: number; done: boolean; comment: string }>) =>
+    ({
+      score,
+      runnable: true,
+      correctness: score,
+      quality: score,
+      summary: '',
+      strengths: [],
+      issues: [],
+      suggestions: [],
+      weakTags: [],
+      exerciseChecks: checks,
+      source: 'ai' as const,
+    });
+  ok(
+    shouldAutoAnswer(mkGrade(50, [{ index: 1, done: true, comment: '' }]), 60) === true,
+    '没过关 → 自动给参考答案'
+  );
+  ok(
+    shouldAutoAnswer(
+      mkGrade(90, [
+        { index: 1, done: true, comment: '' },
+        { index: 2, done: false, comment: '证据不足' },
+      ]),
+      60
+    ) === true,
+    '过关了但有题没做出来 → 也给参考答案'
+  );
+  ok(
+    shouldAutoAnswer(
+      mkGrade(90, [
+        { index: 1, done: true, comment: '' },
+        { index: 2, done: true, comment: '' },
+      ]),
+      60
+    ) === false,
+    '全对且过关 → 不再多花一次模型调用'
+  );
+  ok(shouldAutoAnswer(mkGrade(90, []), 60) === false, '没有逐题信息但已过关 → 不自动生成');
 
   // ---------------------------------------------------------- 收尾
   // 清理临时工作区，别在 TEMP 里堆垃圾
