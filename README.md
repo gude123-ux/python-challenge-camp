@@ -519,6 +519,7 @@ python -c "print(2026 - 2000, 10 / 4, 10 // 4)"
 | `pythonCamp.aiTimeoutSec` | `120` | 模型响应超时（秒）。推理模型建议 180~300 |
 | `pythonCamp.retryOnBadJson` | `true` | 返回的 JSON 结构损坏时自动重试一次 |
 | `pythonCamp.terminalContext` | `true` | 把集成终端里与 Python 相关的命令与输出作为批改证据（需 VS Code 1.93+） |
+| `pythonCamp.retryOnServerError` | `true` | 模型服务返回 5xx / 网络错误时自动重试一次 |
 | `pythonCamp.autoDiagnoseOnError` | `true` | 本地运行失败后自动让 AI 分析报错原因 |
 
 > **用推理模型（gpt-5.x、deepseek-reasoner、o 系列等）的话**，把 `aiTimeoutSec` 调到 180~300、`maxTokens` 调到 8000。
@@ -611,7 +612,7 @@ python-challenge-camp/
 └── scripts/
     ├── launch.js                一键启动逻辑（找 node / 装依赖 / 编译 / 找 VS Code / 启动）
     ├── make-desktop-launcher.py 生成桌面启动器（CRLF + 纯 ASCII + 反斜杠路径，带自检）
-    ├── smoke.ts                 核心逻辑冒烟测试（191 项）
+    ├── smoke.ts                 核心逻辑冒烟测试（197 项）
     ├── smoke.build.js           冒烟测试打包脚本
     ├── loadtest.js              加载测试（54~75 项，含启动器校验；禁止同步子进程的环境会跳过动态校验）
     └── vscode-stub.js           测试用的 vscode 模块替身
@@ -628,7 +629,7 @@ npm run compile        # 打包到 out/extension.js
 npm run watch          # 监听重建
 
 npm run test           # 类型检查 + 打包 + 两套测试
-npm run test:smoke     # 核心逻辑冒烟测试（191 项）
+npm run test:smoke     # 核心逻辑冒烟测试（197 项）
 npm run test:load      # 加载测试（54~75 项，含启动器校验）
 ```
 
@@ -737,6 +738,18 @@ npm run test:load      # 加载测试（54~75 项，含启动器校验）
 并在启动时**主动检测同名插件**，弹窗里直接给一个「卸载它」按钮。
 
 **Q：批改一直显示「正在批改」，很久没结果？**
+1.5.2 把这条链路彻底修了一遍，现在有三层保障：
+1. **网络层超时**覆盖到「读完响应体」（旧版只覆盖到收到响应头，服务端卡住会永远等）；
+2. **业务层总时限**（`aiTimeoutSec × 2 + 60 秒`）+ **看门狗**（另一个独立定时器）——
+   到点强制中止并明确告诉你「本次不记成绩」，界面一定不会永远卡住；
+3. **临时故障自动重试**（`pythonCamp.retryOnServerError`，默认开）：
+   第三方网关随机返回 503 时自动重试一次，不再直接判失败。
+
+出问题时看「输出」面板的 `Python闯关训练营` 日志，里面现在有完整轨迹：
+`[批改] 开始` → `调用模型` → `模型阶段=request/headers/body/done` → `仍在等待模型… 已 N 秒`（心跳）
+→ `模型返回` / `[批改失败]`。心跳还在 = 事件循环正常、在等模型；心跳也停 = 宿主卡死。
+
+**Q：批改一直显示「正在批改」，很久没结果？（旧版行为说明）**
 1.5.0 修掉了根因：网络层超时以前只覆盖「收到响应头」，之后的响应体读取没有超时保护，
 服务端卡住时会一直等。现在超时覆盖到读完响应体，业务层还有总时限
 （`aiTimeoutSec × 2 + 60 秒`）—— 到点会明确提示「批改超时，本次不记成绩」，

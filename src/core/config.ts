@@ -36,6 +36,8 @@ export interface CampConfig {
   autoDiagnoseOnError: boolean;
   /** 是否把集成终端里的 Python 命令与输出作为批改 / 答疑的证据 */
   terminalContext: boolean;
+  /** 模型服务返回 5xx / 网络错误时自动重试一次（第三方网关常随机 503） */
+  retryOnServerError: boolean;
 }
 
 const DEFAULT_PASS_SCORE = 60;
@@ -81,6 +83,7 @@ export function readConfig(): CampConfig {
     retryOnBadJson: c.get<boolean>('retryOnBadJson') ?? true,
     autoDiagnoseOnError: c.get<boolean>('autoDiagnoseOnError') ?? true,
     terminalContext: c.get<boolean>('terminalContext') ?? true,
+    retryOnServerError: c.get<boolean>('retryOnServerError') ?? true,
   };
 }
 

@@ -776,6 +776,47 @@ interface SubmitOpts {
 
 /** 全局串行：同一时刻只允许一个批改在跑 */
 let gradingBusy = false;
+/**
+ * 批改看门狗。
+ *
+ * ★ 为什么还要它：业务层的总时限（withDeadline）依赖"那个 promise 会走到收尾"。
+ * 用户实测遇到过一种更糟的情况 —— 界面永远停在"正在批改"，日志里连超时都没打出来。
+ * 看门狗是**另一个独立定时器**，只要还占着闸门超过阈值就强制释放 + 明确告知用户，
+ * 保证"点一次批改，界面最终一定能动"。
+ */
+let gradingWatchdog: NodeJS.Timeout | undefined;
+
+function stopGradingWatchdog(): void {
+  if (gradingWatchdog) {
+    clearInterval(gradingWatchdog);
+    gradingWatchdog = undefined;
+  }
+}
+
+function startGradingWatchdog(limitMs: number, label: string): void {
+  stopGradingWatchdog();
+  const startedAt = Date.now();
+  gradingWatchdog = setInterval(() => {
+    const waited = Date.now() - startedAt;
+    if (waited < limitMs + 60_000) {
+      return;
+    }
+    stopGradingWatchdog();
+    gradingInFlight.clear();
+    gradingBusy = false;
+    LevelPanel.current?.clearProgress();
+    const msg =
+      `${label} 卡住超过 ${Math.round((limitMs + 60_000) / 1000)} 秒，已强制中止（本次不记成绩）。` +
+      '请到「输出」面板看 Python闯关训练营 的日志。';
+    aiLog.appendLine(`[批改] 看门狗强制中止：${label} 已等待 ${Math.round(waited / 1000)} 秒`);
+    void vscode.window.showWarningMessage(msg, '查看日志').then((pick) => {
+      if (pick === '查看日志') {
+        aiLog.show(true);
+      }
+    });
+  }, 5_000);
+  gradingWatchdog.unref?.();
+}
 
 /** 提交并批改某一关的代码 */
 async function submitLevel(
@@ -806,10 +847,17 @@ async function submitLevel(
   gradingInFlight.add(level.id);
   gradingBusy = true;
   const startedAt = Date.now();
-  aiLog.appendLine(`[批改] 开始 · ${level.id} 第 ${level.day} 关 · 触发来源=${source}`);
+  const capForWatchdog = aiReady(readConfig())
+    ? (readConfig().aiTimeoutSec * 2 + 60) * 1000
+    : 60_000;
+  startGradingWatchdog(capForWatchdog, `第 ${level.day} 关的批改`);
+  aiLog.appendLine(
+    `[批改] 开始 · ${level.id} 第 ${level.day} 关 · 触发来源=${source} · ${new Date().toLocaleTimeString()}`
+  );
   try {
     await submitLevelInner(level, context, document, quiet);
   } finally {
+    stopGradingWatchdog();
     gradingInFlight.delete(level.id);
     gradingBusy = false;
     aiLog.appendLine(
@@ -893,6 +941,20 @@ async function submitLevelInner(
   // 先把关卡页打开（不抢焦点），这样「批改进度」的每一步学生都能看到
   showLevelPanel(level, context);
 
+  /**
+   * 批改结束后要在通知栏说什么 / 要不要弹确认框。
+   * 全部在 withProgress 之外处理 —— 否则进度通知会一直挂着（见下面的说明）。
+   */
+  const result: {
+    msg?: string;
+    passed?: boolean;
+    nextId?: string;
+    /** 过程出错（含超时）的说明 */
+    error?: string;
+    /** AI 没批成的原因 */
+    aiFailed?: string;
+  } = {};
+
   await vscode.window.withProgress(
     {
       location: vscode.ProgressLocation.Notification,
@@ -940,6 +1002,18 @@ async function submitLevelInner(
 
         setStep(idx.grade, 'running');
         publish('已等待 0 秒…');
+        const gradeStartedAt = Date.now();
+        aiLog.appendLine(
+          `[批改] ${level.id} 调用模型 · ${cfg.model} · 超时 ${cfg.aiTimeoutSec} 秒 · ${new Date().toLocaleTimeString()}`
+        );
+        // 心跳：每 15 秒记一行。它的作用是**证明事件循环还活着** ——
+        // 如果连心跳都停了，说明扩展宿主被卡死；如果心跳在跑但结果不回来，就是请求/解析的问题。
+        const heartbeat = setInterval(() => {
+          aiLog.appendLine(
+            `[批改] ${level.id} 仍在等待模型… 已 ${Math.round((Date.now() - gradeStartedAt) / 1000)} 秒`
+          );
+        }, 15_000);
+        heartbeat.unref?.();
         const grading = gradeCode(level, code, run, {
           apiKey: cfg.apiKey,
           apiBaseUrl: cfg.apiBaseUrl,
@@ -950,15 +1024,36 @@ async function submitLevelInner(
           maxTokens: cfg.maxTokens,
           timeoutSec: cfg.aiTimeoutSec,
           retryOnBadJson: cfg.retryOnBadJson,
+          retryTransient: cfg.retryOnServerError ? 1 : 0,
           terminal,
+          onStage: (stage, info) => {
+            aiLog.appendLine(
+              `[批改] ${level.id} 模型阶段=${stage}${
+                info ? ' ' + JSON.stringify(info) : ''
+              } @${new Date().toLocaleTimeString()}`
+            );
+            if (stage === 'headers') {
+              publish('已收到响应头，正在读取内容…');
+            } else if (stage === 'body') {
+              publish('响应体已读完，正在解析结果…');
+            }
+          },
         });
         // 每秒刷新「已等待 N 秒」，让卡住时也能看出是在等模型
-        const outcome = await withTicker(grading, 1000, (ms) => {
-          if (token.isCancellationRequested) {
-            return;
-          }
-          publish(`已等待 ${Math.round(ms / 1000)} 秒…（模型响应中）`);
-        });
+        let outcome;
+        try {
+          outcome = await withTicker(grading, 1000, (ms) => {
+            if (token.isCancellationRequested) {
+              return;
+            }
+            publish(`已等待 ${Math.round(ms / 1000)} 秒…（模型响应中）`);
+          });
+        } finally {
+          clearInterval(heartbeat);
+        }
+        aiLog.appendLine(
+          `[批改] ${level.id} 模型返回 · 用时 ${Math.round((Date.now() - gradeStartedAt) / 1000)} 秒`
+        );
         setStep(idx.grade, 'done');
 
         if (token.isCancellationRequested) {
@@ -985,14 +1080,7 @@ async function submitLevelInner(
         }
         publish(msg);
         LevelPanel.current?.clearProgress();
-        if (!quiet) {
-          const pick = await vscode.window.showWarningMessage(msg, '查看日志', '重试');
-          if (pick === '查看日志') {
-            aiLog.show(true);
-          } else if (pick === '重试') {
-            await submitLevel(level, context, document, { source: 'retry' });
-          }
-        }
+        result.error = msg;
         return;
       }
 
@@ -1025,26 +1113,15 @@ async function submitLevelInner(
         };
         setStep(idx.save, 'skipped');
         setStep(idx.answer, 'skipped');
+        // ★ 必须记日志：这条路径过去**没有任何日志**，
+        //   结果用户看到"一直批改中"时，日志里查不到原因（实测踩过）。
+        aiLog.appendLine(
+          `[批改失败] ${level.id} AI 批改未完成：${reason} · ${new Date().toLocaleTimeString()}`
+        );
         publish(`AI 批改未完成：${reason}`);
         showLevelPanel(level, context);
         LevelPanel.current?.clearProgress();
-        if (quiet) {
-          void vscode.window.showWarningMessage(
-            `第 ${level.day} 关：AI 批改未完成（${reason}）。本次不记成绩。`
-          );
-          return;
-        }
-        const pick = await vscode.window.showWarningMessage(
-          `第 ${level.day} 关：AI 批改未完成（${reason}）。本次不记成绩。`,
-          '重试 AI 批改',
-          '查看日志',
-          '先不批改'
-        );
-        if (pick === '重试 AI 批改') {
-          await submitLevel(level, context, document, { source: 'retry' });
-        } else if (pick === '查看日志') {
-          aiLog.show(true);
-        }
+        result.aiFailed = reason;
         return;
       }
 
@@ -1154,26 +1231,66 @@ async function submitLevelInner(
       refreshStatusBar();
       LevelPanel.current?.clearProgress();
 
-      const msg = `第 ${level.day} 关：${r.score} 分${passed ? '，已过关！' : `（过关线 ${cfg.passScore} 分）`}`;
-      if (quiet) {
-        // 批量补交：不弹需要点确认的对话框，否则会卡在第一个关卡上
-        void vscode.window.showInformationMessage(msg);
-      } else if (passed) {
-        const next = curriculum.nextOf(level.id);
-        const pick = await vscode.window.showInformationMessage(
-          msg,
-          next ? `进入第 ${next.day} 关` : '查看详情'
-        );
-        if (pick && next) {
-          await openLevel(next, context);
-        }
-      } else {
-        void vscode.window.showWarningMessage(
-          `${msg}　已附上参考答案与改进建议，见关卡页底部。`
-        );
-      }
+      // ★ 注意：这里**不能**再 await 需要用户点确认的提示。
+      //   进度通知是包着这个回调的 —— 一旦在里面等用户点「进入下一关」，
+      //   进度通知就会一直挂着不消失，用户看到的就是"永远在批改中"
+      //   （实测踩过：批改其实早就完成了，只是通知没关）。
+      //   所以只记下结果，等 withProgress 结束、通知关掉之后再交互。
+      result.msg = `第 ${level.day} 关：${r.score} 分${
+        passed ? '，已过关！' : `（过关线 ${cfg.passScore} 分）`
+      }`;
+      result.passed = passed;
+      result.nextId = passed ? curriculum.nextOf(level.id)?.id : undefined;
     }
   );
+
+  // —— 进度通知到这里已经关闭，再做需要用户点确认的交互
+  if (result.error) {
+    if (!quiet) {
+      const pick = await vscode.window.showWarningMessage(result.error, '查看日志', '重试');
+      if (pick === '查看日志') {
+        aiLog.show(true);
+      } else if (pick === '重试') {
+        await submitLevel(level, context, document, { source: 'retry' });
+      }
+    }
+    return;
+  }
+
+  if (result.aiFailed) {
+    const text = `第 ${level.day} 关：AI 批改未完成（${result.aiFailed}）。本次不记成绩。`;
+    if (quiet) {
+      void vscode.window.showWarningMessage(text);
+      return;
+    }
+    const pick = await vscode.window.showWarningMessage(text, '重试 AI 批改', '查看日志', '先不批改');
+    if (pick === '重试 AI 批改') {
+      await submitLevel(level, context, document, { source: 'retry' });
+    } else if (pick === '查看日志') {
+      aiLog.show(true);
+    }
+    return;
+  }
+
+  if (result.msg) {
+    if (quiet) {
+      // 批量补交：不弹需要点确认的对话框，否则会卡在第一个关卡上
+      void vscode.window.showInformationMessage(result.msg);
+    } else if (result.passed) {
+      const next = result.nextId ? curriculum.get(result.nextId) : undefined;
+      const pick = await vscode.window.showInformationMessage(
+        result.msg,
+        next ? `进入第 ${next.day} 关` : '查看详情'
+      );
+      if (pick && next) {
+        await openLevel(next, context);
+      }
+    } else {
+      void vscode.window.showWarningMessage(
+        `${result.msg}　已附上参考答案与改进建议，见关卡页底部。`
+      );
+    }
+  }
 }
 
 /** 把 AI 生成的参考答案落盘（带说明头，方便学生知道出处与时间） */
@@ -1451,6 +1568,7 @@ function aiTaskOptions(cfg: CampConfig): TextTaskOptions {
     model: cfg.model,
     maxTokens: cfg.maxTokens,
     timeoutSec: cfg.aiTimeoutSec,
+    retryTransient: cfg.retryOnServerError ? 1 : 0,
   };
 }
 

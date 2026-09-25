@@ -20,7 +20,25 @@ export interface ChatOptions {
   temperature?: number;
   maxTokens?: number;
   timeoutMs?: number;
+  /**
+   * 分阶段回调，用于把「请求发出 → 收到响应头 → 读完响应体」逐步暴露出来。
+   *
+   * 为什么需要它：用户实测「一直显示批改中不出结果」时，
+   * 从外面完全看不出卡在哪一段（是请求没发出去？还是服务端回了头就卡住？）。
+   * 有了它，输出面板能留下带时间戳的轨迹，日志一看就明白。
+   */
+  onStage?: (stage: ChatStage, info?: { ms?: number; bytes?: number; status?: number; attempt?: number }) => void;
+  /**
+   * 遇到**临时性故障**（5xx / 网络错误 / 超时）时额外重试几次，默认 1 次。
+   *
+   * 为什么默认要重试：实测用的第三方网关会随机返回 HTTP 503
+   * （三次请求里挂了两次），而 503 完全是瞬时故障 —— 不重试的话，
+   * 学生每次提交都有一半概率看到「批改失败」。
+   */
+  retryTransient?: number;
 }
+
+export type ChatStage = 'request' | 'headers' | 'body' | 'done' | 'retry';
 
 export interface ChatResult {
   /** 模型给出的正文（已归一化为纯字符串） */
@@ -94,6 +112,28 @@ function normalizeContent(content: unknown): string {
 }
 
 export async function chat(opts: ChatOptions): Promise<ChatResult> {
+  const extra = Math.max(0, Math.min(3, opts.retryTransient ?? 1));
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= extra; attempt++) {
+    try {
+      return await chatOnce(opts);
+    } catch (err) {
+      lastErr = err;
+      const kind = err instanceof AiError ? err.kind : 'unknown';
+      const transient = kind === 'server' || kind === 'network' || kind === 'timeout';
+      if (!transient || attempt === extra) {
+        throw err;
+      }
+      opts.onStage?.('retry', { attempt: attempt + 1 });
+      // 退避一下再试：瞬时故障通常立刻重试就好，稍微等一会儿更稳
+      await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
+    }
+  }
+  throw lastErr;
+}
+
+/** 单次请求（不带重试），由 chat() 负责重试策略 */
+async function chatOnce(opts: ChatOptions): Promise<ChatResult> {
   if (!opts.apiKey || !opts.apiKey.trim()) {
     throw new AiError('未配置 API Key（pythonCamp.apiKey）', 'no-key');
   }
@@ -129,6 +169,7 @@ export async function chat(opts: ChatOptions): Promise<ChatResult> {
   let res: Response;
   let text: string;
   try {
+    opts.onStage?.('request', { bytes: JSON.stringify({ messages: opts.messages }).length });
     res = await fetch(endpoint, {
       method: 'POST',
       headers: {
@@ -144,8 +185,10 @@ export async function chat(opts: ChatOptions): Promise<ChatResult> {
       }),
       signal: controller.signal,
     });
+    opts.onStage?.('headers', { ms: Date.now() - startedAt, status: res.status });
     // 注意：这一句也在定时器的保护范围内（见上面的说明）
     text = await res.text();
+    opts.onStage?.('body', { ms: Date.now() - startedAt, bytes: text.length });
   } catch (err: any) {
     if (timedOut || err?.name === 'AbortError') {
       throw timeoutError();
@@ -224,6 +267,7 @@ export async function chat(opts: ChatOptions): Promise<ChatResult> {
     throw new AiError('模型返回内容为空', 'bad-response', text.slice(0, 600));
   }
 
+  opts.onStage?.('done', { ms: Date.now() - startedAt, bytes: content.length });
   return {
     content,
     finishReason,

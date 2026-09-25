@@ -39,6 +39,7 @@ import {
 import type { TerminalEntry } from '../src/core/terminal';
 import { countStudentCodeLines, scanPendingSubmissions } from '../src/core/pending';
 import { withDeadline, withTicker, DeadlineError } from '../src/util/deadline';
+import { chat } from '../src/ai/client';
 import { runFile, runSnippet, checkSyntax } from '../src/core/runner';
 import { todayKey } from '../src/util/paths';
 import type { GradeResult, Level, RunResult } from '../src/core/types';
@@ -819,6 +820,103 @@ async function main(): Promise<void> {
     '全对且过关 → 不再多花一次模型调用'
   );
   ok(shouldAutoAnswer(mkGrade(90, []), 60) === false, '没有逐题信息但已过关 → 不自动生成');
+
+  // ★ 回归：服务端「回了响应头就不吐数据」时，必须在超时内报错（而不是永远挂着）。
+  //   用户实测的「一直显示批改中」就是这个场景：旧实现一拿到响应头就清了定时器。
+  const http = await import('http');
+  const stallSrv = http.createServer((_req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.write('{"choices":[{"message":{"content":"'); // 之后既不继续写也不 end
+  });
+  await new Promise<void>((resolve) => stallSrv.listen(0, '127.0.0.1', () => resolve()));
+  const stallPort = (stallSrv.address() as { port: number }).port;
+  const stages: string[] = [];
+  const stallStart = Date.now();
+  let stallErr: any = null;
+  try {
+    await chat({
+      baseUrl: `http://127.0.0.1:${stallPort}/v1`,
+      apiKey: 'test',
+      model: 'test',
+      messages: [{ role: 'user', content: 'hi' }],
+      timeoutMs: 800,
+      onStage: (s) => stages.push(s),
+    });
+  } catch (e) {
+    stallErr = e;
+  } finally {
+    stallSrv.close();
+  }
+  const stallMs = Date.now() - stallStart;
+  ok(stallErr?.kind === 'timeout', '★ 响应体读不完时按时超时（不再永远挂着）', String(stallErr?.message ?? '').slice(0, 60));
+  ok(stallMs < 4000, '超时用时接近设定值（说明定时器真的生效）', `${stallMs} ms`);
+  ok(
+    stages.includes('request') && stages.includes('headers') && !stages.includes('body'),
+    '阶段回调能指出卡在「读完响应体」这一步',
+    stages.join(',')
+  );
+
+  // ★ 回归：网关随机 503 时要自动重试（实测用的第三方网关三次里挂两次）
+  let hits = 0;
+  const flakySrv = http.createServer((_req, res) => {
+    hits += 1;
+    if (hits === 1) {
+      res.writeHead(503, { 'Content-Type': 'application/json' });
+      res.end('{"error":"upstream busy"}');
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(
+      JSON.stringify({ choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }], model: 'test' })
+    );
+  });
+  await new Promise<void>((resolve) => flakySrv.listen(0, '127.0.0.1', () => resolve()));
+  const flakyPort = (flakySrv.address() as { port: number }).port;
+  let flakyOk = false;
+  let flakyErr: any = null;
+  try {
+    const r = await chat({
+      baseUrl: `http://127.0.0.1:${flakyPort}/v1`,
+      apiKey: 'test',
+      model: 'test',
+      messages: [{ role: 'user', content: 'hi' }],
+      timeoutMs: 5000,
+      retryTransient: 1,
+    });
+    flakyOk = r.content === 'ok';
+  } catch (e) {
+    flakyErr = e;
+  } finally {
+    flakySrv.close();
+  }
+  ok(flakyOk, '★ 首次 503、重试成功（临时故障不再直接判失败）', String(flakyErr?.message ?? ''));
+  ok(hits === 2, '确实重试了一次（共 2 次请求）', `实际 ${hits} 次`);
+
+  // 关掉重试时应当立刻失败，不浪费额度
+  let hits2 = 0;
+  const always503 = http.createServer((_req, res) => {
+    hits2 += 1;
+    res.writeHead(503, { 'Content-Type': 'application/json' });
+    res.end('{"error":"busy"}');
+  });
+  await new Promise<void>((resolve) => always503.listen(0, '127.0.0.1', () => resolve()));
+  const p2 = (always503.address() as { port: number }).port;
+  let err2: any = null;
+  try {
+    await chat({
+      baseUrl: `http://127.0.0.1:${p2}/v1`,
+      apiKey: 'test',
+      model: 'test',
+      messages: [{ role: 'user', content: 'hi' }],
+      timeoutMs: 5000,
+      retryTransient: 0,
+    });
+  } catch (e) {
+    err2 = e;
+  } finally {
+    always503.close();
+  }
+  ok(err2?.kind === 'server' && hits2 === 1, '关掉重试时只请求一次就报错（可配置）', `kind=${err2?.kind} hits=${hits2}`);
 
   // ---------------------------------------------------------- 收尾
   // 清理临时工作区，别在 TEMP 里堆垃圾

@@ -12,6 +12,7 @@
 import * as vscode from 'vscode';
 import type { GradeResult, Level, RunResult } from './types';
 import { chat, AiError } from '../ai/client';
+import type { ChatOptions } from '../ai/client';
 import { buildMessages } from '../ai/prompt';
 import { analyzeTerminalForLevel } from './terminal';
 
@@ -32,6 +33,10 @@ export interface GradeOptions extends AiCallOptions {
   weakPoints: string[];
   /** 解析彻底失败时是否自动重试一次（默认开） */
   retryOnBadJson?: boolean;
+  /** 模型调用的分阶段回调（用于诊断"卡在哪一步"） */
+  onStage?: ChatOptions['onStage'];
+  /** 5xx / 网络错误时额外重试几次 */
+  retryTransient?: number;
   /** 学生在集成终端里的命令与输出（已格式化），作为可运行性的补充证据 */
   terminal?: string | null;
 }
@@ -588,6 +593,8 @@ export async function gradeCode(
       temperature,
       maxTokens: opts.maxTokens ?? 4000,
       timeoutMs: (opts.timeoutSec ?? 120) * 1000,
+      onStage: opts.onStage,
+      retryTransient: opts.retryTransient,
     });
 
   try {

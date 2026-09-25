@@ -27,6 +27,8 @@ export interface TextTaskOptions {
   maxTokens?: number;
   /** 模型响应超时（秒） */
   timeoutSec?: number;
+  /** 5xx / 网络错误时额外重试几次（默认 1） */
+  retryTransient?: number;
 }
 
 /** 长文本任务的默认预算：比批改宽得多（要写多道题的思路 + 代码） */
@@ -52,6 +54,7 @@ async function runTask(
     // 截断比多花点 token 糟糕得多，而且这些任务都是用户主动触发的。
     maxTokens: Math.max(opts.maxTokens ?? 0, defaultMaxTokens),
     timeoutMs: (opts.timeoutSec ?? defaultTimeoutSec) * 1000,
+    retryTransient: opts.retryTransient,
   });
   return reply.content.trim();
 }
