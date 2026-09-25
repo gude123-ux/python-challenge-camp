@@ -209,6 +209,9 @@ async function main() {
   ok(bundleText.includes('批改进度'), '打包产物含「批改进度」可视化（逐步显示，不再是静止的一句话）');
   ok(bundleText.includes('已等待'), '打包产物含「已等待 N 秒」提示');
   ok(bundleText.includes('参考答案与改进建议'), '打包产物含批改后的「参考答案与改进建议」区块');
+  ok(bundleText.includes('本关精讲'), '打包产物含「本关精讲」渲染');
+  ok(bundleText.includes('需要先会的前置知识'), '打包产物含「前置知识」区块（本地算，不花 token）');
+  ok(bundleText.includes('批量生成精讲'), '打包产物含「批量生成精讲」命令');
 
   console.log('\n=== F. 激活期副作用 ===');
   ok(stub.__state.registeredViews.length > 0, 'activate 期间注册了侧边栏');

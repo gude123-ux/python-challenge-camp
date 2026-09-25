@@ -435,6 +435,10 @@ function registerCommands(context: vscode.ExtensionContext): void {
     void vscode.window.showInformationMessage('今日任务已重置。');
   });
 
+  reg('pythonCamp.genAllTutorials', async () => {
+    await generateAllTutorials(context);
+  });
+
   reg('pythonCamp.tutorial', async () => {
     const lv = currentLevelId ? curriculum.get(currentLevelId) : undefined;
     if (!lv) {
@@ -1643,6 +1647,105 @@ function warmTutorial(level: Level, context: vscode.ExtensionContext): void {
     return;
   }
   void generateTutorial(level, context);
+}
+
+/**
+ * 批量生成「本关精讲」。
+ *
+ * 学生的诉求：「所有关卡都要啊」—— 一关一关点太慢，所以给一个一次跑完全部未生成关卡的命令。
+ * 已存在的跳过（可随时中断、下次续跑），进度用 withProgress 显示，可取消。
+ */
+async function generateAllTutorials(context: vscode.ExtensionContext): Promise<void> {
+  const cfg = readConfig();
+  if (!aiReady(cfg)) {
+    await promptAiSetup('批量生成精讲需要配置 API Key。要不要现在配置？');
+    return;
+  }
+  const missing = curriculum.all.filter((lv) => !existsSync(tutorialFilePath(context, lv)));
+  if (!missing.length) {
+    void vscode.window.showInformationMessage('所有关卡的精讲都已经生成过了。');
+    return;
+  }
+  const pick = await vscode.window.showWarningMessage(
+    `将依次为 ${missing.length} 关生成精讲（已生成的会跳过）。\n` +
+      `每一关都会单独调用一次模型，按每关 30~60 秒估算大约需要 ${Math.ceil(
+        (missing.length * 45) / 60
+      )} 分钟。中途可以取消，已生成的会保留、下次继续。\n确定开始吗？`,
+    { modal: true },
+    `开始生成 ${missing.length} 关`
+  );
+  if (!pick) {
+    return;
+  }
+
+  let done = 0;
+  let failed = 0;
+  const failedDays: number[] = [];
+  const capMs = (cfg.aiTimeoutSec * 2 + 60) * 1000;
+
+  await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: '批量生成精讲',
+      cancellable: true,
+    },
+    async (progress, token) => {
+      for (const lv of missing) {
+        if (token.isCancellationRequested) {
+          break;
+        }
+        progress.report({
+          message: `第 ${lv.day} 关（${done + failed + 1}/${missing.length}）…`,
+          increment: 100 / missing.length,
+        });
+        const file = tutorialFilePath(context, lv);
+        if (existsSync(file)) {
+          done += 1;
+          continue;
+        }
+        try {
+          const prereq = findPrerequisites(lv, curriculum.all, 3);
+          const md: string = await withDeadline(
+            generateLevelTutorial(lv, prerequisitesToText(prereq), aiTaskOptions(cfg)),
+            capMs,
+            `第 ${lv.day} 关精讲`
+          );
+          const header = [
+            `> 本文件由 AI 生成于 ${new Date().toLocaleString()}，用于讲解「怎么做」，不直接给完整答案。`,
+            `> 想要逐题完整代码，看同目录下的《第${String(lv.day).padStart(2, '0')}关_参考答案.md》。`,
+            '',
+            `**关卡**：第 ${lv.day} 关 · ${lv.title}　　**模型**：${cfg.model}`,
+            '',
+            '---',
+            '',
+          ].join('\n');
+          await fs.mkdir(tutorialDir(context), { recursive: true });
+          await fs.writeFile(file, `${header}${md}\n`, 'utf8');
+          done += 1;
+          aiLog.appendLine(`[批量精讲] 第 ${lv.day} 关 ✓ ${md.length} 字符`);
+        } catch (err: any) {
+          failed += 1;
+          failedDays.push(lv.day);
+          aiLog.appendLine(
+            `[批量精讲] 第 ${lv.day} 关 ✗ ${String(err?.message ?? err).split('\n')[0]}`
+          );
+        }
+      }
+    }
+  );
+
+  // 当前关卡若刚好生成好了，刷新页面
+  if (currentLevelId) {
+    const cur = curriculum.get(currentLevelId);
+    if (cur && existsSync(tutorialFilePath(context, cur))) {
+      const md = await fs.readFile(tutorialFilePath(context, cur), 'utf8');
+      lastTutorial = { levelId: cur.id, markdown: md, note: '来自本地缓存文件。' };
+      showLevelPanel(cur, context);
+    }
+  }
+
+  const tail = failedDays.length ? `，失败 ${failed} 关（${failedDays.join('、')}），再点一次可续跑` : '';
+  void vscode.window.showInformationMessage(`批量生成完成：成功 ${done} 关${tail}。`);
 }
 
 async function explainLevel(
