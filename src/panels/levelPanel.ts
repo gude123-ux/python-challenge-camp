@@ -63,6 +63,11 @@ details.acc > summary { cursor: pointer; font-size: 11.5px; color: var(--vscode-
 .progbox .note { font-size: 11px; color: var(--vscode-descriptionForeground); margin-top: 6px; }
 .progbox .barwrap { height: 3px; border-radius: 2px; background: rgba(127,127,127,.22); margin-top: 8px; overflow: hidden; }
 .progbox .barwrap i { display: block; height: 100%; background: var(--vscode-progressBar-background, #2f7fe0); transition: width .3s; }
+/* 前置知识卡片 */
+.prq { border-top: 1px solid var(--vscode-panel-border, rgba(127,127,127,.22)); padding: 8px 0 4px; }
+.prq:first-of-type { border-top: 0; }
+.prq .ph { font-weight: 600; font-size: 12.5px; }
+.prq .pr { font-size: 11px; color: var(--vscode-descriptionForeground); margin: 2px 0 4px; }
 `;
 
 const SCRIPT = String.raw`
@@ -155,6 +160,45 @@ function progressBlock() {
   return '<div class="progbox" id="progbox">' + progressInner() + '</div>';
 }
 
+// ★ 前置知识：本地算出来的，永远有 —— 学生的诉求是「用到之前关卡的内容就帮我贴出来」
+function prereqBlock() {
+  const items = S.prereq || [];
+  if (!items.length) return '';
+  let h = '<h3 class="blk">需要先会的前置知识</h3><div class="card">';
+  h += '<div class="muted" style="font-size:11px;margin-bottom:6px">这一关会用到下面这些内容（都来自前面的关卡）。不熟就先回去看一眼，不用重做。</div>';
+  items.forEach(function (x) {
+    h += '<div class="prq"><div class="ph">第 ' + x.day + ' 关 · ' + esc(x.title) + '</div>' +
+      '<div class="pr">' + esc(x.reason) + '</div>';
+    if (x.points && x.points.length) {
+      h += '<ul class="kn">' + x.points.map(function (k) { return '<li>' + esc(k) + '</li>'; }).join('') + '</ul>';
+    }
+    if (x.snippet) h += '<pre class="code">' + esc(x.snippet) + '</pre>';
+    h += '<div class="btns"><button class="tiny" data-act="gotoPrereq" data-id="' + x.levelId + '">打开第 ' + x.day + ' 关</button></div></div>';
+  });
+  h += '</div>';
+  return h;
+}
+
+// ★ 本关精讲：AI 生成（知识点讲透 + 分步操作 + 逐题分级提示），生成一次永久缓存
+function tutorialBlock() {
+  if (S.tutorialPending) {
+    return '<h3 class="blk">本关精讲</h3><div class="card"><div class="muted">正在生成本关精讲…' +
+      '（知识点讲透 + 分步操作 + 逐题提示，推理模型可能要几十秒）</div></div>';
+  }
+  if (!S.tutorialHtml) {
+    return '<h3 class="blk">本关精讲</h3><div class="card">' +
+      '<div class="muted" style="font-size:11.5px">还没有这一关的精讲。点下面的按钮让 AI 把' +
+      '<b>每个知识点讲透</b>、把<b>每一步该做什么拆开写</b>、并给出<b>逐题提示</b>（不给完整答案）。' +
+      '生成一次会永久保存在本地，之后打开就直接显示。</div>' +
+      '<div class="btns" style="margin-top:8px"><button class="primary tiny" data-act="tutorial">生成本关精讲</button></div>' +
+      '</div>';
+  }
+  return '<h3 class="blk">本关精讲</h3>' +
+    (S.tutorialNote ? '<div class="muted" style="font-size:11px;margin-bottom:6px">' + esc(S.tutorialNote) + '</div>' : '') +
+    '<div class="card md">' + S.tutorialHtml + '</div>' +
+    '<div class="btns" style="margin-top:6px"><button class="tiny" data-act="tutorial">重新生成精讲</button></div>';
+}
+
 function answerBlock() {
   if (S.answerPending) {
     return '<h3 class="blk">参考答案与改进建议</h3><div class="card"><div class="muted">正在生成参考答案…（推理模型可能要几十秒）</div></div>';
@@ -188,6 +232,7 @@ function render() {
     '<button class="primary" data-act="openFile">' + (S.fileExists ? '打开代码文件' : '创建代码文件并开始') + '</button>' +
     '<button data-act="run">本地运行</button>' +
     '<button data-act="submit">提交并批改</button>' +
+    '<button data-act="tutorial">本关精讲（怎么做）</button>' +
     '<button data-act="answer">AI 讲解 / 看参考答案</button>' +
     '<button data-act="solutions">多种解法</button>' +
     '<button data-act="ask">问 AI 助教</button>' +
@@ -217,6 +262,10 @@ function render() {
 
   h += '<h3 class="blk">知识点速览</h3><ul class="kn">' +
     L.knowledge.map(function (k) { return '<li>' + esc(k) + '</li>'; }).join('') + '</ul>';
+
+  // 前置知识 → 精讲 → 练习：先知道要会什么，再看怎么做，最后动手
+  h += prereqBlock();
+  h += tutorialBlock();
 
   if (L.manualExample) {
     h += '<h3 class="blk">示例代码（照着复现一遍）</h3><pre class="code">' + esc(L.manualExample) + '</pre>' +
@@ -251,7 +300,10 @@ function render() {
 document.addEventListener('click', function (e) {
   const el = e.target.closest('[data-act]');
   if (!el) return;
-  send({ type: el.getAttribute('data-act') });
+  const act = el.getAttribute('data-act');
+  const id = el.getAttribute('data-id');
+  if (act === 'gotoPrereq' && id) { send({ type: 'openLevelById', levelId: id }); return; }
+  send({ type: act });
 });
 
 window.addEventListener('message', function (e) {

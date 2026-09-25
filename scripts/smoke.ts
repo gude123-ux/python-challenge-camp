@@ -27,6 +27,7 @@ import {
   buildAlternativeSolutionsMessages,
   buildAskMessages,
   buildAnswerMessages,
+  buildTutorialMessages,
 } from '../src/ai/prompt';
 import { renderMarkdown } from '../src/panels/html';
 import { solutionsFilePath } from '../src/util/paths';
@@ -40,6 +41,7 @@ import type { TerminalEntry } from '../src/core/terminal';
 import { countStudentCodeLines, scanPendingSubmissions } from '../src/core/pending';
 import { withDeadline, withTicker, DeadlineError } from '../src/util/deadline';
 import { chat } from '../src/ai/client';
+import { findPrerequisites, prerequisitesToText } from '../src/core/prereq';
 import { runFile, runSnippet, checkSyntax } from '../src/core/runner';
 import { todayKey } from '../src/util/paths';
 import type { GradeResult, Level, RunResult } from '../src/core/types';
@@ -917,6 +919,54 @@ async function main(): Promise<void> {
     always503.close();
   }
   ok(err2?.kind === 'server' && hits2 === 1, '关掉重试时只请求一次就报错（可配置）', `kind=${err2?.kind} hits=${hits2}`);
+
+  // ---------------------------------------------------------- 14. 前置知识与本关精讲
+  // 用户诉求：「有的关需要用到之前的关卡的内容或知识点，你帮我贴出来」
+  //           「知识点还是太少了，每一关我都不知道咋做」
+  section('14. 前置知识与本关精讲');
+
+  const lv30 = curriculum.get('L30') ?? all[Math.min(29, all.length - 1)];
+  const prq = findPrerequisites(lv30, all, 3);
+  ok(prq.length > 0, '能找出前置关卡（本地算，不依赖 AI）', `${prq.length} 个`);
+  ok(
+    prq.every((x) => x.day < lv30.day),
+    '前置关卡一定在它前面'
+  );
+  ok(
+    prq.every((x) => x.points.length > 0 || x.snippet),
+    '每个前置关卡都贴出了知识点原文或示例代码'
+  );
+  ok(
+    prq.every((x) => x.reason && x.reason.length >= 4),
+    '每个前置关卡都说明了「为什么它是前置」'
+  );
+  ok(
+    new Set(prq.map((x) => x.levelId)).size === prq.length,
+    '前置关卡不重复'
+  );
+
+  const prqFirst = findPrerequisites(all[0], all, 3);
+  ok(prqFirst.length === 0, '第 1 关没有前置关卡（前面确实没有）');
+
+  const prqText = prerequisitesToText(prq);
+  ok(
+    prqText.includes(`第 ${prq[0].day} 关`) && prqText.includes(prq[0].points[0]?.slice(0, 8) ?? ''),
+    '前置知识能渲染成给模型看的文本（含关卡与知识点原文）'
+  );
+  ok(prerequisitesToText([]).includes('没有前置'), '没有前置时给出明确说明');
+
+  // 精讲提示词必须包含用户要的三件事：讲透知识点、分步操作、逐题提示
+  const tutMsgs = buildTutorialMessages(lv30, prqText);
+  const tutUser = tutMsgs[1].content;
+  ok(tutMsgs[0].content.includes('逐题提示'), '精讲系统提示词要求「逐题提示」');
+  ok(tutMsgs[0].content.includes('不给完整答案'), '精讲明确「不给完整答案」（和参考答案分工）');
+  ok(tutMsgs[0].content.includes('前置知识回顾'), '精讲要求写「前置知识回顾」');
+  ok(tutUser.includes(prqText.slice(0, 40)), '精讲请求里带上了前置知识原文');
+  ok(tutUser.includes(lv30.exercises[0].slice(0, 12)), '精讲请求里带上了本关练习题');
+  ok(
+    tutUser.includes('本关讲义') || (lv30.lesson ?? []).length === 0,
+    '精讲请求里带上了本关讲义'
+  );
 
   // ---------------------------------------------------------- 收尾
   // 清理临时工作区，别在 TEMP 里堆垃圾

@@ -13,6 +13,7 @@
 import { chat, type ChatMessage } from './client';
 import {
   buildAnswerMessages,
+  buildTutorialMessages,
   buildAlternativeSolutionsMessages,
   buildAskMessages,
   buildErrorMessages,
@@ -62,6 +63,21 @@ async function runTask(
 /** 本关参考答案与讲解（Markdown） */
 export async function generateLevelAnswer(level: Level, opts: TextTaskOptions): Promise<string> {
   return runTask(buildAnswerMessages(level) as ChatMessage[], opts, 0.3);
+}
+
+/**
+ * 生成「本关精讲」（知识点讲透 + 分步操作 + 逐题分级提示 + 常见错误 + 自查）。
+ *
+ * 与 generateLevelAnswer 的分工：那个是**答案**（做完对照用），
+ * 这个是**怎么做的教程**（不给完整答案，只给思路与留空的骨架）。
+ * 结果会落盘缓存，同一关只生成一次。
+ */
+export async function generateLevelTutorial(
+  level: Level,
+  prereqText: string,
+  opts: TextTaskOptions
+): Promise<string> {
+  return runTask(buildTutorialMessages(level, prereqText) as ChatMessage[], opts, 0.35);
 }
 
 /**

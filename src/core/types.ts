@@ -198,6 +198,7 @@ export type WebviewMessage =
   | { type: 'openLevel'; levelId: string }
   | { type: 'submitLevel'; levelId: string }
   | { type: 'submitPending' }
+  | { type: 'openLevelById'; levelId: string }
   | { type: 'runLevel'; levelId: string }
   | { type: 'answerLevel'; levelId: string }
   | { type: 'solutionsLevel'; levelId: string }

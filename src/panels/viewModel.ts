@@ -10,6 +10,8 @@ import { Curriculum } from '../core/curriculum';
 import { ProgressStore } from '../core/store';
 import { Scheduler } from '../core/scheduler';
 import type { PendingLevel } from '../core/pending';
+import { findPrerequisites } from '../core/prereq';
+import type { PrereqItem } from '../core/prereq';
 import { CampConfig, aiReady } from '../core/config';
 import { renderMarkdown } from './html';
 import { todayKey } from '../util/paths';
@@ -107,6 +109,17 @@ export interface LevelDetailModel {
   answerPending?: boolean;
   /** 参考答案的补充说明（例如「已保存到 xxx.md」） */
   answerNote?: string;
+  /**
+   * 这一关依赖的前置知识（本地算出来的，永远有）。
+   * 学生的诉求：「有的关需要用到之前的关卡的内容或知识点，你帮我贴出来」。
+   */
+  prereq: PrereqItem[];
+  /** 本关精讲（AI 生成、已渲染的 HTML）：知识点讲透 + 分步操作 + 逐题提示 */
+  tutorialHtml?: string;
+  /** 精讲的补充说明（缓存路径 / 生成失败原因） */
+  tutorialNote?: string;
+  /** 精讲正在生成 */
+  tutorialPending?: boolean;
 }
 
 export class ViewModelBuilder {
@@ -244,6 +257,8 @@ export class ViewModelBuilder {
       lastComment: lp?.history?.length ? lp.history[lp.history.length - 1].summary : '',
       diagnosisHtml: diagnosis ? renderMarkdown(diagnosis) : undefined,
       runFailed: !!run && !run.ok,
+      // 前置知识：本地算，永远有（不依赖 AI，也不花 token）
+      prereq: findPrerequisites(level, this.curriculum.all, 3),
     };
   }
 }

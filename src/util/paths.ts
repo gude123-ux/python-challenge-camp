@@ -87,6 +87,17 @@ export function answerFilePath(context: vscode.ExtensionContext, level: Level): 
   return path.join(answerDir(context), name);
 }
 
+/** 「本关精讲」目录（和参考答案放一起，学生找得到） */
+export function tutorialDir(context: vscode.ExtensionContext): string {
+  return path.join(workDir(context), '精讲');
+}
+
+/** 某一关的「本关精讲」文件路径（Markdown，生成一次永久缓存） */
+export function tutorialFilePath(context: vscode.ExtensionContext, level: Level): string {
+  const name = `第${String(level.day).padStart(2, '0')}关_精讲.md`;
+  return path.join(tutorialDir(context), name);
+}
+
 /** 某一关的「多种解法」文件路径（Markdown，与参考答案同目录） */
 export function solutionsFilePath(context: vscode.ExtensionContext, level: Level): string {
   const name = `第${String(level.day).padStart(2, '0')}关_多种解法.md`;

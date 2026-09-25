@@ -11,7 +11,7 @@
 
 import * as vscode from 'vscode';
 import * as fs from 'fs/promises';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import * as path from 'path';
 
 import { ProgressStore } from './core/store';
@@ -21,11 +21,13 @@ import { StudyTimer } from './core/timer';
 import { runFile } from './core/runner';
 import { TerminalRecorder } from './core/terminal';
 import { scanPendingSubmissions } from './core/pending';
+import { findPrerequisites, prerequisitesToText } from './core/prereq';
 import type { PendingLevel } from './core/pending';
 import { withDeadline, withTicker, DeadlineError } from './util/deadline';
 import { gradeCode, promptAiSetup, extractJson, shouldAutoAnswer } from './core/grader';
 import {
   generateLevelAnswer,
+  generateLevelTutorial,
   generateErrorDiagnosis,
   generateAlternativeSolutions,
   askAssistant,
@@ -49,6 +51,8 @@ import {
   todayKey,
   answerFilePath,
   answerDir,
+  tutorialFilePath,
+  tutorialDir,
   solutionsFilePath,
   stateDir,
   workDir,
@@ -90,6 +94,13 @@ let lastRun: RunResult | null = null;
 let lastRunLevelId: string | undefined;
 /** 最近一次生成的参考答案（跟关卡绑定，换关就不显示） */
 let lastAnswer: { levelId: string; markdown: string; note: string } | null = null;
+/**
+ * 本关精讲（AI 生成的教程：知识点讲透 + 分步操作 + 逐题提示），同样按关卡作用域。
+ * 生成结果落盘缓存，所以通常是从文件读回来的。
+ */
+let lastTutorial: { levelId: string; markdown: string; note: string } | null = null;
+/** 正在生成精讲的关卡 */
+const tutorialGenerating = new Set<string>();
 /**
  * 「写了代码但没提交批改」的关卡（缓存）。
  *
@@ -424,6 +435,15 @@ function registerCommands(context: vscode.ExtensionContext): void {
     void vscode.window.showInformationMessage('今日任务已重置。');
   });
 
+  reg('pythonCamp.tutorial', async () => {
+    const lv = currentLevelId ? curriculum.get(currentLevelId) : undefined;
+    if (!lv) {
+      void vscode.window.showWarningMessage('先从面板里选一关，再生成精讲。');
+      return;
+    }
+    await generateTutorial(lv, context, true);
+  });
+
   reg('pythonCamp.submitPending', async () => {
     await submitPendingLevels(context);
   });
@@ -531,6 +551,8 @@ async function openLevel(level: Level, context: vscode.ExtensionContext): Promis
 
   showLevelPanel(level, context, true);
   sidebar.refresh();
+  // 打开关卡时顺手把精讲准备好（没有才生成；失败静默，不打扰学生）
+  warmTutorial(level, context);
 }
 
 /** 刷新关卡详情页 */
@@ -556,6 +578,26 @@ function showLevelPanel(level: Level, context: vscode.ExtensionContext, reveal =
   if (lastAnswer && lastAnswer.levelId === level.id) {
     model.answerHtml = renderMarkdown(lastAnswer.markdown);
     model.answerNote = lastAnswer.note;
+  }
+  // 本关精讲同理
+  if (tutorialGenerating.has(level.id)) {
+    model.tutorialPending = true;
+  } else if (lastTutorial && lastTutorial.levelId === level.id) {
+    model.tutorialHtml = renderMarkdown(lastTutorial.markdown);
+    model.tutorialNote = lastTutorial.note;
+  } else {
+    // 还没生成过，但本地已有缓存文件（上次生成完就落盘了）——直接读，不重复调模型
+    const cached = tutorialFilePath(context, level);
+    if (existsSync(cached)) {
+      try {
+        const md = readFileSync(cached, 'utf8');
+        lastTutorial = { levelId: level.id, markdown: md, note: '来自本地缓存文件。' };
+        model.tutorialHtml = renderMarkdown(md);
+        model.tutorialNote = lastTutorial.note;
+      } catch {
+        /* 读不到就当没有 */
+      }
+    }
   }
   panel.setModel(model);
   if (reveal) {
@@ -584,6 +626,9 @@ async function handlePanelAction(
       break;
     case 'answer':
       await explainLevel(level, context);
+      break;
+    case 'tutorial':
+      await generateTutorial(level, context, true);
       break;
     case 'solutions':
       await multipleSolutions(level, context);
@@ -1500,6 +1545,106 @@ async function openAnswerPreview(file: string): Promise<void> {
  * 而不是只弹一次 —— 这样学生能反复看、能离线看、也能自己批注。
  * 已经生成过就直接打开，避免重复烧 token。
  */
+/**
+ * 生成（或读取缓存的）「本关精讲」。
+ *
+ * 与「参考答案」的分工：
+ *   * 参考答案 = 逐题完整代码，做完对照用；
+ *   * 本关精讲 = 教你怎么做 —— 知识点讲透 + 分步操作 + 逐题分级提示（不给完整答案）。
+ *
+ * 生成一次落盘缓存（`python-camp/精讲/第NN关_精讲.md`），之后打开关卡直接读文件、不再调模型。
+ */
+async function generateTutorial(
+  level: Level,
+  context: vscode.ExtensionContext,
+  force = false
+): Promise<void> {
+  const cfg = readConfig();
+  const file = tutorialFilePath(context, level);
+
+  if (!force && existsSync(file)) {
+    try {
+      const md = await fs.readFile(file, 'utf8');
+      lastTutorial = { levelId: level.id, markdown: md, note: '来自本地缓存文件（想重做点「重新生成精讲」）。' };
+      showLevelPanel(level, context);
+      return;
+    } catch {
+      /* 读不到就重新生成 */
+    }
+  }
+
+  if (!aiReady(cfg)) {
+    await promptAiSetup('生成本关精讲需要配置 API Key。要不要现在配置？');
+    return;
+  }
+  if (tutorialGenerating.has(level.id)) {
+    void vscode.window.showInformationMessage(`第 ${level.day} 关的精讲正在生成中，稍等。`);
+    return;
+  }
+
+  tutorialGenerating.add(level.id);
+  showLevelPanel(level, context); // 让页面立刻显示"正在生成"
+  const capMs = (cfg.aiTimeoutSec * 2 + 60) * 1000;
+  try {
+    await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `AI 正在写第 ${level.day} 关的精讲…（讲透知识点 + 分步操作 + 逐题提示）`,
+        cancellable: false,
+      },
+      async () => {
+        // 前置知识在本地算，作为「这一关依赖什么」的原始素材交给模型引用
+        const prereq = findPrerequisites(level, curriculum.all, 3);
+        const prereqText = prerequisitesToText(prereq);
+        aiLog.appendLine(
+          `[精讲] 开始 · ${level.id} · 前置：${prereq.map((p) => p.levelId).join(',') || '无'} · ${new Date().toLocaleTimeString()}`
+        );
+        const md: string = await withDeadline(
+          generateLevelTutorial(level, prereqText, aiTaskOptions(cfg)),
+          capMs,
+          '精讲生成'
+        );
+        const header = [
+          `> 本文件由 AI 生成于 ${new Date().toLocaleString()}，用于讲解「怎么做」，不直接给完整答案。`,
+          `> 想要逐题完整代码，看同目录下的《第${String(level.day).padStart(2, '0')}关_参考答案.md》。`,
+          '',
+          `**关卡**：第 ${level.day} 关 · ${level.title}　　**模型**：${cfg.model}`,
+          '',
+          '---',
+          '',
+        ].join('\n');
+        await fs.mkdir(tutorialDir(context), { recursive: true });
+        await fs.writeFile(file, `${header}${md}\n`, 'utf8');
+        lastTutorial = {
+          levelId: level.id,
+          markdown: `${header}${md}`,
+          note: `已保存到 ${path.relative(workDir(context), file)}，下次打开直接显示。`,
+        };
+        aiLog.appendLine(`[精讲] 完成 · ${level.id} · ${md.length} 字符`);
+      }
+    );
+  } catch (err: any) {
+    const msg = String(err?.message ?? err).split('\n')[0];
+    aiLog.appendLine(`[精讲失败] ${level.id}：${msg}`);
+    await reportAiTaskError('生成本关精讲', err);
+  } finally {
+    tutorialGenerating.delete(level.id);
+    showLevelPanel(level, context);
+  }
+}
+
+/** 打开某一关时，如果还没有精讲，就顺手在后台生成（不阻塞、失败也不打扰） */
+function warmTutorial(level: Level, context: vscode.ExtensionContext): void {
+  const cfg = readConfig();
+  if (!aiReady(cfg)) {
+    return;
+  }
+  if (existsSync(tutorialFilePath(context, level)) || tutorialGenerating.has(level.id)) {
+    return;
+  }
+  void generateTutorial(level, context);
+}
+
 async function explainLevel(
   level: Level,
   context: vscode.ExtensionContext,
@@ -1973,6 +2118,13 @@ async function handleWebviewMessage(
       if (lv) {
         currentLevelId = lv.id;
         await submitLevel(lv, context, undefined, { source: 'sidebar' });
+      }
+      break;
+    }
+    case 'openLevelById': {
+      const lv = curriculum.get(msg.levelId);
+      if (lv) {
+        await openLevel(lv, context);
       }
       break;
     }
