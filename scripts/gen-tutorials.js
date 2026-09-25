@@ -92,9 +92,12 @@ async function main() {
   bundle([path.join(ROOT, 'src', 'ai', 'prompt.ts')], promptJs);
   bundle([path.join(ROOT, 'src', 'core', 'prereq.ts')], prereqJs);
   bundle([path.join(ROOT, 'src', 'ai', 'client.ts')], clientJs);
+  const refsJs = path.join(tmp, 'refs.js');
+  bundle([path.join(ROOT, 'src', 'core', 'refs.ts')], refsJs);
 
   const { buildTutorialMessages } = require(promptJs);
   const { findPrerequisites, prerequisitesToText } = require(prereqJs);
+  const { exerciseRefsToText } = require(refsJs);
   const { chat } = require(clientJs);
 
   const bank = JSON.parse(fs.readFileSync(path.join(ROOT, 'data', 'levels.json'), 'utf8'));
@@ -134,7 +137,10 @@ async function main() {
         baseUrl,
         apiKey,
         model,
-        messages: buildTutorialMessages(lv, prerequisitesToText(prereq)),
+        messages: buildTutorialMessages(
+          lv,
+          [prerequisitesToText(prereq), exerciseRefsToText(lv, bank.levels)].filter(Boolean).join('\n\n')
+        ),
         maxTokens,
         timeoutMs: timeoutSec * 1000,
         retryTransient: 2,

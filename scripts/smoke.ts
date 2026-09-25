@@ -42,6 +42,7 @@ import { countStudentCodeLines, scanPendingSubmissions } from '../src/core/pendi
 import { withDeadline, withTicker, DeadlineError } from '../src/util/deadline';
 import { chat } from '../src/ai/client';
 import { findPrerequisites, prerequisitesToText } from '../src/core/prereq';
+import { findExerciseRefs, refsCommentBlock, exerciseRefsToText } from '../src/core/refs';
 import { runFile, runSnippet, checkSyntax } from '../src/core/runner';
 import { todayKey } from '../src/util/paths';
 import type { GradeResult, Level, RunResult } from '../src/core/types';
@@ -967,6 +968,98 @@ async function main(): Promise<void> {
     tutUser.includes('本关讲义') || (lv30.lesson ?? []).length === 0,
     '精讲请求里带上了本关讲义'
   );
+
+  // ---------------------------------------------------------- 15. 练习引用的前关代码
+  // 用户诉求：「很多关卡用的都是之前关卡的原代码的改写，比如第十关第三题，
+  //           但我懒得找第七天那个东西了，你要在题目中把源代码贴过来」
+  section('15. 练习引用到的前关代码（内联贴出来）');
+
+  // ---- 核心算法：用合成关卡测，不依赖题库规模（公开版只有 8 关也能跑）----
+  const fakeEarlier = {
+    id: 'FX7',
+    day: 7,
+    chapter: 1,
+    chapterTitle: '示例章',
+    title: '示例统计器',
+    difficulty: 1,
+    estimatedMinutes: 60,
+    goal: '',
+    knowledge: [],
+    exercises: [],
+    accept: '',
+    transfer: '',
+    manualExample: 'n = len(scores)\nbest, worst = max(scores), min(scores)\npass_rate = 0.5',
+    starterCode: '',
+    tags: ['示例'],
+    source: '',
+  } as unknown as (typeof all)[number];
+  const fakeCurrent = {
+    ...fakeEarlier,
+    id: 'FX10',
+    day: 10,
+    title: '示例函数关',
+    manualExample: '',
+    exercises: ['重构 day07 统计器：拆成 2 个函数', '随便写一句完全无关的话，不含任何标识符'],
+  } as unknown as (typeof all)[number];
+  const fakeAll = [fakeEarlier, fakeCurrent];
+  const t0 = Date.now();
+  const frefs = findExerciseRefs(fakeCurrent, fakeAll);
+  ok(Date.now() - t0 < 2000, '★ 引用识别不会卡死（曾有正则 lastIndex 死循环的 bug）');
+  ok(frefs.get(1)?.[0]?.day === 7, '题目里的 day07 → 取第 7 关的代码', `第 ${frefs.get(1)?.[0]?.day} 关`);
+  ok(!!frefs.get(1)?.[0]?.code, '带上了被引用关卡的源代码');
+  ok(frefs.size === 1, '无关题目不会硬凑引用', `命中 ${frefs.size} 道`);
+
+  const l10 = curriculum.get('L10');
+  if (l10) {
+    const t0 = Date.now();
+    const refs = findExerciseRefs(l10, all);
+    const ms = Date.now() - t0;
+    // ★ 回归：这里曾经死循环（建了带 g 的正则却用非全局正则 exec，lastIndex 永不前进）
+    ok(ms < 2000, '★ 引用识别不会卡死（曾有正则 lastIndex 死循环的 bug）', `${ms} ms`);
+
+    const ex3 = (refs.get(3) ?? [])[0];
+    ok(!!ex3, '第 10 关练习 3（「重构 day07 统计器」）识别出引用', JSON.stringify(refs.get(3)?.map((r) => r.day)));
+    ok(ex3?.day === 7, '识别为第 7 关', `第 ${ex3?.day} 关`);
+    ok(!!ex3?.code && ex3.code.length > 40, '带上了被引用关卡的源代码', `${ex3?.code.length} 字符`);
+    ok(
+      !!ex3?.reason && ex3.reason.includes('第 7 关'),
+      '说明了判定依据（题目里写明了 day07）',
+      ex3?.reason
+    );
+
+    const l15 = curriculum.get('L15');
+    const ex15 = l15 ? (findExerciseRefs(l15, all).get(3) ?? [])[0] : undefined;
+    ok(ex15?.day === 14, '第 15 关练习 3（改造 day14 成绩分析器）识别为第 14 关', `第 ${ex15?.day} 关`);
+
+    // 不该误报：完全不提前面内容的题目
+    const fake = {
+      ...l10,
+      id: 'FAKE',
+      exercises: ['随便写一句完全无关的话，不含任何标识符'],
+    } as typeof l10;
+    ok(findExerciseRefs(fake, all).size === 0, '无关题目不会硬凑引用');
+
+    // 相对说法「上一关」→ 紧邻的前一关
+    const fake2 = {
+      ...l10,
+      id: 'FAKE2',
+      exercises: ['把上一关的代码改成函数'],
+    } as typeof l10;
+    const r2 = (findExerciseRefs(fake2, all).get(1) ?? [])[0];
+    ok(r2?.day === 9, '「上一关」识别为紧邻的前一关', `第 ${r2?.day} 关`);
+
+    // 注释块格式（追加到学生文件用）
+    const block = refsCommentBlock(refs);
+    ok(block.includes('[前关代码]') === false && block.includes('第 3 题要用到的代码'), '注释块带题号说明');
+    ok(block.split('\n').every((l) => l === '' || l.startsWith('#')), '注释块每一行都是注释（不会影响代码运行）');
+
+    // 精讲提示词要带上引用代码
+    const tut = buildTutorialMessages(l10, exerciseRefsToText(l10, all));
+    ok(tut[1].content.includes('练习要用到的前面关卡的代码'), '精讲请求里带上了「练习引用的前关代码」');
+  } else {
+    // 公开版示例题库只有 8 关，跳过依赖题库规模的断言（核心算法上面已用合成关卡测过）
+    ok(true, '题库里没有第 10 关 → 跳过题库相关的引用断言（核心算法已用合成关卡覆盖）');
+  }
 
   // ---------------------------------------------------------- 收尾
   // 清理临时工作区，别在 TEMP 里堆垃圾

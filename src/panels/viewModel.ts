@@ -12,6 +12,8 @@ import { Scheduler } from '../core/scheduler';
 import type { PendingLevel } from '../core/pending';
 import { findPrerequisites } from '../core/prereq';
 import type { PrereqItem } from '../core/prereq';
+import { findExerciseRefs } from '../core/refs';
+import type { ExerciseRef } from '../core/refs';
 import { CampConfig, aiReady } from '../core/config';
 import { renderMarkdown } from './html';
 import { todayKey } from '../util/paths';
@@ -120,6 +122,11 @@ export interface LevelDetailModel {
   tutorialNote?: string;
   /** 精讲正在生成 */
   tutorialPending?: boolean;
+  /**
+   * 每道练习引用到的前面关卡的代码（本地算）。
+   * 学生的诉求：「很多关是之前关卡原代码的改写…你要在题目中把源代码贴过来」。
+   */
+  exerciseRefs: ExerciseRef[];
 }
 
 export class ViewModelBuilder {
@@ -259,6 +266,8 @@ export class ViewModelBuilder {
       runFailed: !!run && !run.ok,
       // 前置知识：本地算，永远有（不依赖 AI，也不花 token）
       prereq: findPrerequisites(level, this.curriculum.all, 3),
+      // 每道练习引用到的前关代码：本地算，直接贴在题目下面
+      exerciseRefs: Array.from(findExerciseRefs(level, this.curriculum.all).values()).flat(),
     };
   }
 }

@@ -22,6 +22,7 @@ import { runFile } from './core/runner';
 import { TerminalRecorder } from './core/terminal';
 import { scanPendingSubmissions } from './core/pending';
 import { findPrerequisites, prerequisitesToText } from './core/prereq';
+import { findExerciseRefs, sourceCodeOf, refsCommentBlock, exerciseRefsToText } from './core/refs';
 import type { PendingLevel } from './core/pending';
 import { withDeadline, withTicker, DeadlineError } from './util/deadline';
 import { gradeCode, promptAiSetup, extractJson, shouldAutoAnswer } from './core/grader';
@@ -531,9 +532,67 @@ async function ensureLevelFile(context: vscode.ExtensionContext, level: Level): 
     await fs.access(uri.fsPath);
   } catch {
     await fs.mkdir(path.dirname(uri.fsPath), { recursive: true });
-    await fs.writeFile(uri.fsPath, level.starterCode, 'utf8');
+    // ★ 建文件时就把「这道练习要用到的前面关卡的代码」以注释形式附在末尾。
+    //   学生的诉求：「很多关是之前关卡原代码的改写…我懒得找第七天那个东西了」。
+    let content = level.starterCode;
+    const refs = findExerciseRefs(level, curriculum.all);
+    const block = refs.size ? refsCommentBlock(refs) : '';
+    if (block) {
+      content += `\n\n# 下面是本关练习要用到的、来自前面关卡的代码（原样附上，省得你回去翻）\n${block}\n`;
+    }
+    await fs.writeFile(uri.fsPath, content, 'utf8');
   }
   return uri;
+}
+
+/**
+ * 把某一关的示例代码追加到学生当前文件末尾（注释形式），带去重标记。
+ * 对应关卡页每道练习题下面的「把这段代码追加到我的文件」。
+ */
+async function appendRefCode(
+  level: Level,
+  day: number,
+  context: vscode.ExtensionContext
+): Promise<void> {
+  const refLevel = curriculum.all.find((l) => l.day === day);
+  const code = refLevel ? sourceCodeOf(refLevel) : '';
+  if (!refLevel || !code) {
+    void vscode.window.showWarningMessage(`找不到第 ${day} 关的示例代码。`);
+    return;
+  }
+  const uri = await ensureLevelFile(context, level);
+  const doc = await vscode.workspace.openTextDocument(uri);
+  const marker = `# [前关代码] 第 ${day} 关`;
+  if (doc.getText().includes(marker)) {
+    const pos = doc.getText().indexOf(marker);
+    const line = doc.positionAt(pos);
+    const editor = await vscode.window.showTextDocument(doc, { preview: false, viewColumn: vscode.ViewColumn.One });
+    editor.revealRange(new vscode.Range(line, line), vscode.TextEditorRevealType.InCenter);
+    void vscode.window.showInformationMessage(`第 ${day} 关的代码已经在你的文件里了（搜「[前关代码]」就能找到）。`);
+    return;
+  }
+  const lines = [
+    '',
+    '',
+    '# ' + '='.repeat(58),
+    `${marker}「${refLevel.title}」的示例代码`,
+    '# ' + '='.repeat(58),
+    ...code.split('\n').map((l) => '# ' + l),
+    '# ' + '='.repeat(58),
+  ];
+  const edit = new vscode.WorkspaceEdit();
+  edit.insert(uri, new vscode.Position(Math.max(0, doc.lineCount), 0), lines.join('\n'));
+  const applied = await vscode.workspace.applyEdit(edit);
+  if (applied) {
+    await doc.save();
+    const pos = doc.lineCount - lines.length;
+    const editor = await vscode.window.showTextDocument(doc, { preview: false, viewColumn: vscode.ViewColumn.One });
+    const at = new vscode.Position(Math.max(0, pos), 0);
+    editor.revealRange(new vscode.Range(at, at), vscode.TextEditorRevealType.InCenter);
+    void vscode.window.showInformationMessage(`已把第 ${day} 关的代码追加到文件末尾（注释形式，不会影响运行）。`);
+  } else {
+    void vscode.window.showErrorMessage('写入失败，请检查文件是否被其他程序占用。');
+  }
 }
 
 /** 打开某一关：建文件 → 打开编辑器 → 打开详情页 */
@@ -1599,7 +1658,9 @@ async function generateTutorial(
       async () => {
         // 前置知识在本地算，作为「这一关依赖什么」的原始素材交给模型引用
         const prereq = findPrerequisites(level, curriculum.all, 3);
-        const prereqText = prerequisitesToText(prereq);
+        const prereqText = [prerequisitesToText(prereq), exerciseRefsToText(level, curriculum.all)]
+          .filter(Boolean)
+          .join('\n\n');
         aiLog.appendLine(
           `[精讲] 开始 · ${level.id} · 前置：${prereq.map((p) => p.levelId).join(',') || '无'} · ${new Date().toLocaleTimeString()}`
         );
@@ -2221,6 +2282,13 @@ async function handleWebviewMessage(
       if (lv) {
         currentLevelId = lv.id;
         await submitLevel(lv, context, undefined, { source: 'sidebar' });
+      }
+      break;
+    }
+    case 'appendRef': {
+      const lv = currentLevelId ? curriculum.get(currentLevelId) : undefined;
+      if (lv && typeof msg.day === 'number') {
+        await appendRefCode(lv, msg.day, context);
       }
       break;
     }

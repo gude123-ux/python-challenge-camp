@@ -68,6 +68,10 @@ details.acc > summary { cursor: pointer; font-size: 11.5px; color: var(--vscode-
 .prq:first-of-type { border-top: 0; }
 .prq .ph { font-weight: 600; font-size: 12.5px; }
 .prq .pr { font-size: 11px; color: var(--vscode-descriptionForeground); margin: 2px 0 4px; }
+/* 练习题里内联贴出的「前关源代码」 */
+.refcode { margin: 6px 0 2px; border-left: 3px solid var(--vscode-charts-blue, #2f7fe0); padding: 4px 0 4px 8px; background: rgba(127,127,127,.06); border-radius: 4px; }
+.refcode > summary { cursor: pointer; font-size: 11.5px; font-weight: 600; }
+.refcode pre.code { margin-top: 6px; }
 `;
 
 const SCRIPT = String.raw`
@@ -273,7 +277,21 @@ function render() {
   }
 
   h += '<h3 class="blk">编程练习题</h3><ol class="ex">' +
-    L.exercises.map(function (e) { return '<li>' + esc(e) + '</li>'; }).join('') + '</ol>';
+    L.exercises.map(function (e, i) {
+      const refs = (S.exerciseRefs || []).filter(function (r) { return r.index === i + 1; });
+      let item = '<li>' + esc(e);
+      refs.forEach(function (r) {
+        // ★ 直接贴出被引用的源代码：学生的诉求是「懒得回去找第七天那个东西」
+        item += '<details class="refcode" open><summary>这题要用到的代码 —— 来自第 ' + r.day + ' 关「' + esc(r.title) + '」</summary>' +
+          '<div class="muted" style="font-size:10.5px;margin:2px 0 4px">判定依据：' + esc(r.reason) + '</div>' +
+          '<pre class="code">' + esc(r.code) + '</pre>' +
+          '<div class="btns">' +
+            '<button class="tiny" data-act="appendRef" data-day="' + r.day + '">把这段代码追加到我的文件</button>' +
+            '<button class="tiny" data-act="gotoPrereq" data-id="' + r.levelId + '">打开第 ' + r.day + ' 关</button>' +
+          '</div></details>';
+      });
+      return item + '</li>';
+    }).join('') + '</ol>';
 
   if (L.accept) h += '<h3 class="blk">验收标准</h3><div class="card">' + esc(L.accept) + '</div>';
   if (L.transfer) h += '<details class="acc"><summary>迁移视角（这个知识点还能用在哪）</summary><div style="margin-top:6px">' + esc(L.transfer) + '</div></details>';
@@ -303,6 +321,7 @@ document.addEventListener('click', function (e) {
   const act = el.getAttribute('data-act');
   const id = el.getAttribute('data-id');
   if (act === 'gotoPrereq' && id) { send({ type: 'openLevelById', levelId: id }); return; }
+  if (act === 'appendRef') { send({ type: 'appendRef', day: Number(el.getAttribute('data-day')) }); return; }
   send({ type: act });
 });
 
