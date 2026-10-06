@@ -34,6 +34,8 @@ import {
   askAssistant,
 } from './ai/tasks';
 import { chat, AiError, resolveEndpoint } from './ai/client';
+import { buildMessages } from './ai/prompt';
+import { checkEndpoint, formatReport } from './ai/netcheck';
 import { readConfig, aiReady } from './core/config';
 import type { CampConfig } from './core/config';
 import type { GradeResult, Level, RunResult, WebviewMessage } from './core/types';
@@ -434,6 +436,10 @@ function registerCommands(context: vscode.ExtensionContext): void {
     );
     sidebar.refresh();
     void vscode.window.showInformationMessage('今日任务已重置。');
+  });
+
+  reg('pythonCamp.diagnoseNetwork', async () => {
+    await diagnoseNetwork(context);
   });
 
   reg('pythonCamp.genAllTutorials', async () => {
@@ -2463,4 +2469,74 @@ async function exportReport(context: vscode.ExtensionContext): Promise<void> {
   const doc = await vscode.workspace.openTextDocument(file);
   await vscode.window.showTextDocument(doc, { preview: false });
   void vscode.window.showInformationMessage(`学习报告已导出：${file}`);
+}
+
+/**
+ * 「网络诊断」：分层测一遍 AI 服务的连通性与速度，把结果写进输出面板。
+ *
+ * 用户的场景：「网站和视频都能看，但 API 就是不行」—— 这句话本身说明不了问题在哪一层，
+ * 所以这里逐层测：DNS → TLS → 基线对比（GitHub）→ 小请求 → 真实尺寸请求，
+ * 并给出结论与下一步建议。
+ */
+async function diagnoseNetwork(context: vscode.ExtensionContext): Promise<void> {
+  const cfg = readConfig();
+  const level = currentLevelId ? curriculum.get(currentLevelId) : undefined;
+  const realMessages = level
+    ? buildMessages({
+        level,
+        code: await readLevelCode(context, level),
+        run: null,
+        strictMode: cfg.strictMode,
+        weakPoints: store.weakRanking(5).map((w) => w.tag),
+        terminal: null,
+      })
+    : undefined;
+
+  aiLog.appendLine('');
+  aiLog.appendLine('='.repeat(60));
+  aiLog.appendLine('[网络诊断] 开始（目标：' + (cfg.apiBaseUrl || '(未配置)') + '）');
+  aiLog.show(true);
+
+  await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: '正在诊断 AI 服务连通性…（DNS / TLS / 小请求 / 真实尺寸请求）',
+      cancellable: false,
+    },
+    async (progress) => {
+      progress.report({ message: '逐层测试中…' });
+      const report = await checkEndpoint({
+        baseUrl: cfg.apiBaseUrl,
+        apiKey: cfg.apiKey,
+        model: cfg.model,
+        timeoutSec: cfg.aiTimeoutSec,
+        realMessages: realMessages as Array<{ role: string; content: string }> | undefined,
+        realPromptChars: realMessages ? realMessages.reduce((sum, m) => sum + m.content.length, 0) : 0,
+      });
+      aiLog.appendLine(formatReport(report));
+      aiLog.appendLine('='.repeat(60));
+
+      const failed = report.steps.filter((s) => !s.ok);
+      if (failed.length) {
+        const pick = await vscode.window.showWarningMessage(
+          `网络诊断：${report.verdict}`,
+          '查看完整报告',
+          '换服务地址'
+        );
+        if (pick === '查看完整报告') {
+          aiLog.show(true);
+        } else if (pick === '换服务地址') {
+          await vscode.commands.executeCommand('workbench.action.openSettings', 'pythonCamp.apiBaseUrl');
+        }
+      } else {
+        const pick = await vscode.window.showInformationMessage(
+          `网络诊断：${report.verdict}`,
+          '查看完整报告'
+        );
+        if (pick === '查看完整报告') {
+          aiLog.show(true);
+        }
+      }
+    }
+  );
 }

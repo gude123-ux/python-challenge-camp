@@ -44,6 +44,7 @@ import { chat } from '../src/ai/client';
 import { findPrerequisites, prerequisitesToText } from '../src/core/prereq';
 import { findExerciseRefs, refsCommentBlock, exerciseRefsToText } from '../src/core/refs';
 import { generateAlternativeSolutions } from '../src/ai/tasks';
+import { checkEndpoint, formatReport, verdictOf, endpointOf } from '../src/ai/netcheck';
 import { runFile, runSnippet, checkSyntax } from '../src/core/runner';
 import { todayKey } from '../src/util/paths';
 import type { GradeResult, Level, RunResult } from '../src/core/types';
@@ -1188,6 +1189,99 @@ async function main(): Promise<void> {
   const solMd2 = await generateAlternativeSolutions(solLevel, solOpts as any, undefined, undefined);
   ok(solMd2.includes('生成失败') && solMd2.includes('第 2 题'), '单题失败时如实标注，不影响其他题');
   solSrv.close();
+
+  // ---------------------------------------------------------- 17. 网络诊断
+  // 用户场景：「我连网站或看视频可以，但用 api 不行」—— 需要能分清是哪一层的问题
+  section('17. 网络诊断（分层定位「API 不通」）');
+
+  ok(
+    endpointOf('https://a.com/v1') === 'https://a.com/v1/chat/completions',
+    'endpointOf：/v1 结尾自动补 chat/completions'
+  );
+  ok(
+    endpointOf('https://a.com') === 'https://a.com/v1/chat/completions',
+    'endpointOf：裸域名补 /v1/chat/completions'
+  );
+  ok(
+    endpointOf('https://a.com/v1/chat/completions/') === 'https://a.com/v1/chat/completions',
+    'endpointOf：已带完整路径时不重复拼'
+  );
+
+  // 结论判定（纯函数）：覆盖几种典型故障，确认给的建议对路
+  const vDns = verdictOf([{ name: 'DNS 解析 x', ok: false, ms: 30, detail: 'ENOTFOUND' }]);
+  ok(vDns.verdict.includes('域名解析'), 'DNS 失败 → 结论指向域名解析');
+  ok(vDns.advice.join(' ').includes('DNS'), 'DNS 失败 → 建议里给出 DNS 排查动作');
+
+  const vLocal = verdictOf([
+    { name: 'DNS 解析 x', ok: true, ms: 20, detail: '1.2.3.4' },
+    { name: 'TLS 握手 api.github.com', ok: false, ms: 12000, detail: '超时' },
+    { name: '接口可用性（8 token）', ok: false, ms: 12000, detail: '超时 >12 秒' },
+  ]);
+  ok(vLocal.verdict.includes('本机网络'), '连基线站都不通 → 判定为本机网络问题');
+  ok(vLocal.advice.join(' ').includes('代理'), '本机网络问题 → 提醒检查代理软件');
+
+  const v502 = verdictOf([
+    { name: 'DNS 解析 x', ok: true, ms: 20, detail: '1.2.3.4' },
+    { name: '接口可用性（8 token）', ok: false, ms: 400, detail: 'HTTP 502（网关 502：源站过载/不可用）' },
+  ]);
+  ok(v502.advice.join(' ').includes('对方源站'), '5xx → 明确指出是对方源站的问题，不是本机');
+  ok(v502.advice.join(' ').includes('换服务商'), '5xx → 给出「换服务商」的建议');
+
+  const vSlow = verdictOf([
+    { name: 'DNS 解析 x', ok: true, ms: 20, detail: '1.2.3.4' },
+    { name: '接口可用性（8 token）', ok: true, ms: 9000, detail: 'HTTP 200' },
+    { name: '真实尺寸请求', ok: true, ms: 27500, detail: 'HTTP 200' },
+  ]);
+  ok(vSlow.verdict.includes('偏慢'), '慢但可用 → 结论说"偏慢"而不是"不可用"');
+  ok(vSlow.advice.join(' ').includes('aiTimeoutSec'), '慢 → 建议调大超时');
+
+  const vRealFail = verdictOf([
+    { name: 'DNS 解析 x', ok: true, ms: 20, detail: '1.2.3.4' },
+    { name: '接口可用性（8 token）', ok: true, ms: 900, detail: 'HTTP 200' },
+    { name: '真实尺寸请求', ok: false, ms: 180000, detail: '超时' },
+  ]);
+  ok(vRealFail.verdict.includes('真实任务会超时'), '小请求通、大请求超时 → 结论区分得开');
+  ok(vRealFail.advice.join(' ').includes('按题拆分'), '大请求超时 → 提醒用拆分的任务');
+
+  // formatReport 要能渲染成可读文本
+  const fakeReport = {
+    target: 'https://x/v1/chat/completions',
+    steps: [
+      { name: 'DNS 解析 x', ok: true, ms: 20, detail: '1.2.3.4' },
+      { name: '接口可用性（8 token）', ok: false, ms: 500, detail: 'HTTP 502' },
+    ],
+    verdict: '不可用：接口请求失败',
+    advice: ['服务端 5xx，换服务商'],
+  };
+  const txt = formatReport(fakeReport);
+  ok(txt.includes('✓') && txt.includes('✗'), '报告里成功/失败都有标记');
+  ok(txt.includes('结论：') && txt.includes('换服务商'), '报告包含结论与建议');
+
+  // 端到端：指向假服务端，确认 checkEndpoint 真的会去请求并如实记录
+  const ncSrv = http.createServer((_req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(
+      JSON.stringify({ choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }], model: 't' })
+    );
+  });
+  await new Promise<void>((r) => ncSrv.listen(0, '127.0.0.1', () => r()));
+  const ncPort = (ncSrv.address() as { port: number }).port;
+  const ncReport = await checkEndpoint({
+    baseUrl: `http://127.0.0.1:${ncPort}/v1`,
+    apiKey: 'k',
+    model: 't',
+    timeoutSec: 10,
+    baselineHost: '127.0.0.1',
+    realMessages: [{ role: 'user', content: 'x'.repeat(500) }],
+    realPromptChars: 500,
+  });
+  ncSrv.close();
+  ok(ncReport.steps.length >= 4, '诊断覆盖 DNS / TLS / 基线 / 小请求 / 真实请求', `${ncReport.steps.length} 步`);
+  ok(
+    ncReport.steps.some((s) => s.name.includes('接口可用性') && s.ok),
+    '对可达端点判为可用'
+  );
+  ok(ncReport.verdict.includes('可用'), '给出明确结论', ncReport.verdict);
 
   // ---------------------------------------------------------- 收尾
   // 清理临时工作区，别在 TEMP 里堆垃圾
