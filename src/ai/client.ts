@@ -36,9 +36,18 @@ export interface ChatOptions {
    * 学生每次提交都有一半概率看到「批改失败」。
    */
   retryTransient?: number;
+  /**
+   * 输出被 max_tokens 截断时，**自动把上限翻倍重试**（默认开）。
+   *
+   * 为什么要有：截断不是"出错"，只是"额度给少了"。用户实测在「多种解法」这类
+   * 长输出任务上撞过 32000 的截断 —— 直接把失败丢给用户是最差的选择。
+   */
+  escalateOnTruncate?: boolean;
+  /** 自动提高的上限（默认 128000） */
+  maxTokensCeiling?: number;
 }
 
-export type ChatStage = 'request' | 'headers' | 'body' | 'done' | 'retry';
+export type ChatStage = 'request' | 'headers' | 'body' | 'done' | 'retry' | 'escalate';
 
 export interface ChatResult {
   /** 模型给出的正文（已归一化为纯字符串） */
@@ -112,24 +121,52 @@ function normalizeContent(content: unknown): string {
 }
 
 export async function chat(opts: ChatOptions): Promise<ChatResult> {
-  const extra = Math.max(0, Math.min(3, opts.retryTransient ?? 1));
-  let lastErr: unknown;
-  for (let attempt = 0; attempt <= extra; attempt++) {
+  let transientLeft = Math.max(0, Math.min(3, opts.retryTransient ?? 1));
+  const baseMax = opts.maxTokens ?? 4000;
+  const escalate = opts.escalateOnTruncate !== false;
+  const ceiling = Math.max(baseMax, Math.min(200_000, opts.maxTokensCeiling ?? 128_000));
+  let maxTokens = baseMax;
+  let escalationsLeft = escalate ? 3 : 0;
+
+  for (;;) {
     try {
-      return await chatOnce(opts);
+      return await chatOnce({ ...opts, maxTokens });
     } catch (err) {
-      lastErr = err;
       const kind = err instanceof AiError ? err.kind : 'unknown';
-      const transient = kind === 'server' || kind === 'network' || kind === 'timeout';
-      if (!transient || attempt === extra) {
-        throw err;
+
+      // ★ 截断：把额度翻倍再试，而不是把"输出被截断"直接甩给用户
+      if (kind === 'truncated' && escalationsLeft > 0 && maxTokens < ceiling) {
+        const next = Math.min(ceiling, maxTokens * 2);
+        opts.onStage?.('escalate', { attempt: maxTokens, bytes: next });
+        maxTokens = next;
+        escalationsLeft -= 1;
+        continue;
       }
-      opts.onStage?.('retry', { attempt: attempt + 1 });
-      // 退避一下再试：瞬时故障通常立刻重试就好，稍微等一会儿更稳
-      await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
+
+      // 临时故障（5xx / 网络 / 超时）退避重试
+      const transient = kind === 'server' || kind === 'network' || kind === 'timeout';
+      if (transient && transientLeft > 0) {
+        transientLeft -= 1;
+        const attemptNo = Math.max(1, Math.min(3, opts.retryTransient ?? 1) - transientLeft);
+        opts.onStage?.('retry', { attempt: attemptNo });
+        // 退避 1.2s / 2.4s / 3.6s —— 按"第几次重试"算，第一次不要等太久
+        await new Promise((r) => setTimeout(r, 1200 * attemptNo));
+        continue;
+      }
+
+      // 截断且已经升到上限：把话说清楚，别让用户去猜
+      if (kind === 'truncated' && maxTokens > baseMax) {
+        throw new AiError(
+          `${(err as Error).message}\n（已自动把 max_tokens 从 ${baseMax} 提到 ${maxTokens} 仍被截断：` +
+            `说明这个模型单次输出上限就在这个量级。可以换支持更长输出的模型，` +
+            `或把任务拆小——例如「多种解法」已经是按题分别生成的。）`,
+          'truncated',
+          (err as AiError).detail
+        );
+      }
+      throw err;
     }
   }
-  throw lastErr;
 }
 
 /** 单次请求（不带重试），由 chat() 负责重试策略 */

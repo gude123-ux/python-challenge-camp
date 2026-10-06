@@ -476,6 +476,44 @@ export function buildAlternativeSolutionsMessages(
   ];
 }
 
+/**
+ * 「多种解法」的**单题版**提示词。
+ *
+ * 为什么按题拆：一次写「3 道题 × 3 种解法 + 优缺点 + 决策建议」是几千 token 的输出，
+ * 很容易撞上模型的单次输出上限（用户实测：max_tokens 顶到 32000 还是被截断）。
+ * 拆成一道题一次调用后，单次输出量降到约 1/3，基本不会再截断；
+ * 而且某一道题失败不影响其他题。
+ */
+export function buildSolutionsForExerciseMessages(
+  level: Level,
+  exerciseIndex: number,
+  refCode?: string
+): Array<{ role: 'system' | 'user'; content: string }> {
+  const ex = level.exercises?.[exerciseIndex] ?? '';
+  const lines = [
+    `【关卡】第 ${level.day} 关 · ${level.title}（第 ${level.chapter} 章 ${level.chapterTitle}）`,
+    `【难度】${level.difficulty}/5（星级越高，可用语法范围越宽）`,
+    `【今日目标】${level.goal || '（见知识点）'}`,
+  ];
+  const lesson = lessonText(level, 1500);
+  if (lesson) {
+    lines.push('', lesson);
+  }
+  lines.push(
+    '',
+    `【本次只讲这一道练习（第 ${exerciseIndex + 1} 题 / 共 ${level.exercises?.length ?? 1} 题）】`,
+    ex
+  );
+  if (refCode) {
+    lines.push('', '【这道题要用到的、来自前面关卡的代码（原样给出）】', '```python', refCode, '```');
+  }
+  lines.push('', SOLUTIONS_TEMPLATE.replace('# 第 N 关 多种解法', `# 第 ${level.day} 关 · 第 ${exerciseIndex + 1} 题 多种解法`));
+  return [
+    { role: 'system', content: SOLUTIONS_SYSTEM },
+    { role: 'user', content: lines.join('\n') },
+  ];
+}
+
 // ------------------------------------------------------------------ 问答
 
 /**

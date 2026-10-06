@@ -1926,15 +1926,24 @@ async function multipleSolutions(
     return;
   }
 
+  // 每道题要用到的前关代码（本地算），按题号取
+  const refsMap = findExerciseRefs(level, curriculum.all);
+  const refCodeFor = (i: number): string | undefined => refsMap.get(i + 1)?.[0]?.code;
+
   await vscode.window.withProgress(
     {
       location: vscode.ProgressLocation.Notification,
-      title: `AI 正在整理第 ${level.day} 关的多种解法…（推理模型可能要几十秒）`,
+      title: `AI 正在整理第 ${level.day} 关的多种解法…（按题分别生成，推理模型可能要几十秒）`,
       cancellable: false,
     },
-    async () => {
+    async (progress) => {
       try {
-        const md = await generateAlternativeSolutions(level, aiTaskOptions(cfg));
+        const md = await generateAlternativeSolutions(
+          level,
+          aiTaskOptions(cfg),
+          (done, total) => progress.report({ message: `第 ${done}/${total} 题…` }),
+          refCodeFor
+        );
         const header = [
           `> 本文件由 AI 生成于 ${new Date().toLocaleString()}，解法仅供参考，不保证覆盖全部写法。`,
           '> 建议先自己写完一种，再来看其他思路。',

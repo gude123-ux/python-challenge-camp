@@ -15,6 +15,7 @@ import {
   buildAnswerMessages,
   buildTutorialMessages,
   buildAlternativeSolutionsMessages,
+  buildSolutionsForExerciseMessages,
   buildAskMessages,
   buildErrorMessages,
 } from './prompt';
@@ -33,7 +34,13 @@ export interface TextTaskOptions {
 }
 
 /** 长文本任务的默认预算：比批改宽得多（要写多道题的思路 + 代码） */
-const LONG_FORM_TOKENS = 8000;
+/**
+ * 长文本任务的默认输出上限。
+ *
+ * 8000 是"够用就好"的起点：讲解 / 精讲 / 多种解法都是几千字的产物。
+ * 真不够时不用手动调 —— `chat()` 会在截断时自动翻倍重试（最高 128000）。
+ */
+const LONG_FORM_TOKENS = 12000;
 const LONG_FORM_TIMEOUT_SEC = 240;
 
 async function runTask(
@@ -105,11 +112,51 @@ export async function generateErrorDiagnosis(
 }
 
 /** 同一道题的多种解法（Markdown） */
+/**
+ * 生成「多种解法」。
+ *
+ * ★ 按题拆分：一次写「3 道题 × 3 种解法 + 优缺点 + 决策建议」输出量很大，
+ * 很容易撞上模型单次输出上限（用户实测 max_tokens 顶到 32000 仍被截断）。
+ * 现在**每道题单独一次调用**，单次输出量降到约 1/3；某题失败也不影响其他题。
+ * 只有一道题时才走原来的整关版。
+ *
+ * @param onProgress 进度回调（当前题号 / 总题数），用于通知栏显示
+ */
 export async function generateAlternativeSolutions(
   level: Level,
-  opts: TextTaskOptions
+  opts: TextTaskOptions,
+  onProgress?: (done: number, total: number) => void,
+  /** 每道题要用到的前关代码（来自 core/refs，按题号索引） */
+  refCodeFor?: (exerciseIndex: number) => string | undefined
 ): Promise<string> {
-  return runTask(buildAlternativeSolutionsMessages(level) as ChatMessage[], opts, 0.4);
+  const exercises = level.exercises ?? [];
+  if (exercises.length <= 1) {
+    return runTask(buildAlternativeSolutionsMessages(level) as ChatMessage[], opts, 0.4);
+  }
+
+  const parts: string[] = [];
+  const failed: number[] = [];
+  for (let i = 0; i < exercises.length; i++) {
+    onProgress?.(i + 1, exercises.length);
+    try {
+      const md = await runTask(
+        buildSolutionsForExerciseMessages(level, i, refCodeFor?.(i)) as ChatMessage[],
+        opts,
+        0.4
+      );
+      parts.push(md.trim());
+    } catch (err) {
+      failed.push(i + 1);
+      parts.push(
+        `## 第 ${i + 1} 题\n\n> 这一题生成失败：${String((err as Error)?.message ?? err).split('\n')[0]}\n> 可以稍后单独重试（多按一次「多种解法」会全部重来，建议先看其他题）。`
+      );
+    }
+  }
+  const head = `# 第 ${level.day} 关 · ${level.title} 多种解法\n\n> 本文件按题分别生成（共 ${exercises.length} 题），每题至少 3 种思路不同的解法。\n`;
+  const tail = failed.length
+    ? `\n\n---\n\n> 注：第 ${failed.join('、')} 题没生成成功，其余题目不受影响。`
+    : '';
+  return `${head}\n${parts.join('\n\n---\n\n')}${tail}`;
 }
 
 /**

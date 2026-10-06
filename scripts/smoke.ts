@@ -43,6 +43,7 @@ import { withDeadline, withTicker, DeadlineError } from '../src/util/deadline';
 import { chat } from '../src/ai/client';
 import { findPrerequisites, prerequisitesToText } from '../src/core/prereq';
 import { findExerciseRefs, refsCommentBlock, exerciseRefsToText } from '../src/core/refs';
+import { generateAlternativeSolutions } from '../src/ai/tasks';
 import { runFile, runSnippet, checkSyntax } from '../src/core/runner';
 import { todayKey } from '../src/util/paths';
 import type { GradeResult, Level, RunResult } from '../src/core/types';
@@ -843,6 +844,7 @@ async function main(): Promise<void> {
       model: 'test',
       messages: [{ role: 'user', content: 'hi' }],
       timeoutMs: 800,
+      retryTransient: 0,
       onStage: (s) => stages.push(s),
     });
   } catch (e) {
@@ -1060,6 +1062,132 @@ async function main(): Promise<void> {
     // 公开版示例题库只有 8 关，跳过依赖题库规模的断言（核心算法上面已用合成关卡测过）
     ok(true, '题库里没有第 10 关 → 跳过题库相关的引用断言（核心算法已用合成关卡覆盖）');
   }
+
+  // ---------------------------------------------------------- 16. 输出上限与截断自愈
+  // 用户反馈：「模型最大输出 token 只能设到 32000 以下，多种解法会超过然后报错，
+  //           就不能设多一点吗」
+  section('16. 输出上限与截断自愈');
+
+  // 16a) 截断自动升配：假服务端在 max_tokens 小时回 finish_reason=length，大了才给完整答案
+  const seenMaxTokens: number[] = [];
+  const truncSrv = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (d) => (body += d));
+    req.on('end', () => {
+      let mt = 0;
+      try {
+        mt = JSON.parse(body).max_tokens;
+      } catch {
+        /* ignore */
+      }
+      seenMaxTokens.push(mt);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      if (mt < 8000) {
+        // 模拟「输出被 max_tokens 截断」
+        res.end(
+          JSON.stringify({
+            choices: [{ message: { content: '{"a":1,"b":' }, finish_reason: 'length' }],
+            model: 't',
+          })
+        );
+      } else {
+        res.end(
+          JSON.stringify({
+            choices: [{ message: { content: '{"a":1,"b":2}' }, finish_reason: 'stop' }],
+            model: 't',
+          })
+        );
+      }
+    });
+  });
+  await new Promise<void>((r) => truncSrv.listen(0, '127.0.0.1', () => r()));
+  const truncPort = (truncSrv.address() as { port: number }).port;
+  let escalated: any = null;
+  let escalErr: any = null;
+  try {
+    escalated = await chat({
+      baseUrl: `http://127.0.0.1:${truncPort}/v1`,
+      apiKey: 'k',
+      model: 't',
+      messages: [{ role: 'user', content: 'hi' }],
+      maxTokens: 2000,
+      timeoutMs: 5000,
+    });
+  } catch (e) {
+    escalErr = e;
+  } finally {
+    truncSrv.close();
+  }
+  ok(
+    escalated?.content === '{"a":1,"b":2}',
+    '★ 被截断时自动提高 max_tokens 并成功（不再直接把失败丢给用户）',
+    String(escalErr?.message ?? '').slice(0, 80)
+  );
+  ok(
+    seenMaxTokens.length >= 2 && seenMaxTokens[1] > seenMaxTokens[0],
+    '确实把额度翻倍重试了',
+    seenMaxTokens.join(' → ')
+  );
+
+  // 16b) 上限确实放开了（设置项 schema 的 maximum）
+  const pkgJson = JSON.parse(
+    (await import('fs')).readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')
+  );
+  const mtSchema = pkgJson.contributes.configuration.properties['pythonCamp.maxTokens'];
+  ok(mtSchema.maximum >= 128000, 'maxTokens 设置上限已放开到 >= 128000', `当前 ${mtSchema.maximum}`);
+
+  // 16c) 「多种解法」按题拆分：3 道题 = 3 次请求，且合并结果包含每题
+  const solLevel = curriculum.get('L10') ?? all[0];
+  const solBodies: any[] = [];
+  let failSecond = false;
+  const solSrv = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (d) => (body += d));
+    req.on('end', () => {
+      solBodies.push(JSON.parse(body));
+      if (failSecond && solBodies.length === 2) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end('{"error":"boom"}');
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          choices: [
+            {
+              message: { content: `## 解法总览\n\n- 解法一\n- 解法二\n- 解法三` },
+              finish_reason: 'stop',
+            },
+          ],
+          model: 't',
+        })
+      );
+    });
+  });
+  await new Promise<void>((r) => solSrv.listen(0, '127.0.0.1', () => r()));
+  const solPort = (solSrv.address() as { port: number }).port;
+  const solOpts = {
+    apiBaseUrl: `http://127.0.0.1:${solPort}/v1`,
+    apiKey: 'k',
+    model: 't',
+    maxTokens: 4000,
+    timeoutSec: 20,
+    retryTransient: 0,
+  };
+  const solMd = await generateAlternativeSolutions(solLevel, solOpts as any, undefined, undefined);
+  ok(
+    solBodies.length === (solLevel.exercises?.length ?? 0),
+    '★ 「多种解法」按题拆分（每道题一次请求，避免一次写太多被截断）',
+    `${solBodies.length} 次 / ${solLevel.exercises?.length} 题`
+  );
+  ok(solMd.includes('第 1 题') || solMd.includes('多种解法'), '合并结果带题号与标题');
+
+  // 16d) 某题失败不影响其他题
+  failSecond = true;
+  solBodies.length = 0;
+  const solMd2 = await generateAlternativeSolutions(solLevel, solOpts as any, undefined, undefined);
+  ok(solMd2.includes('生成失败') && solMd2.includes('第 2 题'), '单题失败时如实标注，不影响其他题');
+  solSrv.close();
 
   // ---------------------------------------------------------- 收尾
   // 清理临时工作区，别在 TEMP 里堆垃圾
