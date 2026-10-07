@@ -78,13 +78,29 @@ export class ChatPanel {
   private disposables: vscode.Disposable[] = [];
   private messages: ChatMessageModel[] = [];
   private contextLabel = '';
+  /**
+   * 面板是否已经销毁。
+   *
+   * ★ 为什么必须有它：面板被用户关掉之后，如果外部还拿着这个对象继续
+   * `postMessage` / `reveal`，VS Code 会抛 `Error: Webview is disposed`，
+   * 表现就是「点按钮没反应」（用户实测踩过：点「问 AI」不再弹出面板）。
+   * 所有对外方法在销毁后都必须变成安全的空操作。
+   */
+  private disposed = false;
 
   private constructor(
     private readonly panel: vscode.WebviewPanel,
     private readonly cb: ChatCallbacks
   ) {
     this.panel.webview.html = this.render();
-    this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
+    this.panel.onDidDispose(() => {
+      this.disposed = true;
+      ChatPanel.current = undefined;
+      for (const d of this.disposables) {
+        d.dispose();
+      }
+      this.disposables = [];
+    }, this.disposables);
     this.panel.webview.onDidReceiveMessage(
       async (msg: { type?: string; text?: string }) => {
         if (msg?.type === 'ask') {
@@ -100,11 +116,17 @@ export class ChatPanel {
     );
   }
 
+  /** 面板是否还能用（外部调用前先问一下，别拿着废对象发消息） */
+  isAlive(): boolean {
+    return !this.disposed;
+  }
+
   static show(extensionUri: vscode.Uri, cb: ChatCallbacks): ChatPanel {
-    if (ChatPanel.current) {
+    if (ChatPanel.current && ChatPanel.current.isAlive()) {
       ChatPanel.current.panel.reveal(vscode.ViewColumn.Beside, true);
       return ChatPanel.current;
     }
+    ChatPanel.current = undefined;
     const panel = vscode.window.createWebviewPanel(
       ChatPanel.viewType,
       'AI 助教 · 随时提问',
@@ -115,32 +137,49 @@ export class ChatPanel {
     return ChatPanel.current;
   }
 
-  /** 用扩展侧保存的完整历史刷新面板 */
+  /** 用扩展侧保存的完整历史刷新面板（面板已销毁时安全跳过） */
   setMessages(messages: ChatMessageModel[]): void {
     this.messages = messages;
+    if (this.disposed) {
+      return;
+    }
     void this.panel.webview.postMessage({ type: 'messages', messages: this.messages });
   }
 
   setBusy(busy: boolean, hint = ''): void {
+    if (this.disposed) {
+      return;
+    }
     void this.panel.webview.postMessage({ type: 'busy', busy, hint });
   }
 
   setContext(label: string): void {
     this.contextLabel = label;
+    if (this.disposed) {
+      return;
+    }
     void this.panel.webview.postMessage({ type: 'context', label });
   }
 
   reveal(): void {
+    if (this.disposed) {
+      return;
+    }
     this.panel.reveal(vscode.ViewColumn.Beside, true);
   }
 
   dispose(): void {
+    this.disposed = true;
     ChatPanel.current = undefined;
-    this.panel.dispose();
     for (const d of this.disposables) {
       d.dispose();
     }
     this.disposables = [];
+    try {
+      this.panel.dispose();
+    } catch {
+      /* 已经销毁过就算了 */
+    }
   }
 
   private render(): string {

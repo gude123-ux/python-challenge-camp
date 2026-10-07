@@ -370,6 +370,11 @@ export class LevelPanel {
    * 面板上的按钮仍然作用在第 5 关 —— 点「提交并批改」会批改错误的关卡。
    */
   private onAction: (type: string) => void | Promise<void>;
+  /**
+   * 面板是否已销毁。与 ChatPanel 同样的护栏：销毁后再 postMessage 会抛
+   * `Webview is disposed`（外部看不到反应）。所有对外方法在销毁后都是空操作。
+   */
+  private disposed = false;
 
   private constructor(
     panel: vscode.WebviewPanel,
@@ -404,14 +409,21 @@ export class LevelPanel {
       null,
       this.disposables
     );
-    this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
+    this.panel.onDidDispose(() => {
+      this.disposed = true;
+      LevelPanel.current = undefined;
+      for (const d of this.disposables) {
+        d.dispose();
+      }
+      this.disposables = [];
+    }, this.disposables);
   }
 
   static show(
     extensionUri: vscode.Uri,
     onAction: (type: string) => void | Promise<void>
   ): LevelPanel {
-    if (LevelPanel.current) {
+    if (LevelPanel.current && LevelPanel.current.isAlive()) {
       // 复用已有面板：必须把回调换成「当前这一关」的，否则按钮会作用在上一关
       LevelPanel.current.onAction = onAction;
       LevelPanel.current.panel.reveal(vscode.ViewColumn.Beside, true);
@@ -427,8 +439,16 @@ export class LevelPanel {
     return LevelPanel.current;
   }
 
+  /** 面板是否还能用 */
+  isAlive(): boolean {
+    return !this.disposed;
+  }
+
   /** 更新标题与内容 */
   setModel(model: LevelDetailModel): void {
+    if (this.disposed) {
+      return;
+    }
     this.model = model;
     this.panel.title = `第 ${model.level.day} 关 · ${model.level.title}`;
     this.push();
@@ -442,11 +462,17 @@ export class LevelPanel {
     steps: Array<{ label: string; state: 'pending' | 'running' | 'done' | 'failed' | 'skipped' }>,
     note?: string
   ): void {
+    if (this.disposed) {
+      return;
+    }
     void this.panel.webview.postMessage({ type: 'progress', steps, note: note ?? '' });
   }
 
   /** 清掉进度块（批改结束） */
   clearProgress(): void {
+    if (this.disposed) {
+      return;
+    }
     void this.panel.webview.postMessage({ type: 'progress', steps: [], note: '' });
   }
 
@@ -467,11 +493,16 @@ export class LevelPanel {
   }
 
   dispose(): void {
+    this.disposed = true;
     LevelPanel.current = undefined;
-    this.panel.dispose();
     for (const d of this.disposables) {
       d.dispose();
     }
     this.disposables = [];
+    try {
+      this.panel.dispose();
+    } catch {
+      /* 已经销毁过就算了 */
+    }
   }
 }

@@ -607,7 +607,11 @@ async function openLevel(level: Level, context: vscode.ExtensionContext): Promis
   // 批改结果 / 运行结果 / 报错分析 / 参考答案现在都**按关卡作用域**保存，
   // 所以换关时不需要清空 —— 回到某一关还能看到它上次的成绩与答案，
   // 也不会出现「在第 7 关看到第 5 关分数」的串档问题。
-  chatPanel?.setContext(chatContextLabel(level));
+  if (chatPanel?.isAlive()) {
+    chatPanel.setContext(chatContextLabel(level));
+  } else {
+    chatPanel = undefined; // 已销毁，别留着废引用
+  }
 
   const uri = await ensureLevelFile(context, level);
   const doc = await vscode.workspace.openTextDocument(uri);
@@ -1067,6 +1071,8 @@ async function submitLevelInner(
     error?: string;
     /** AI 没批成的原因 */
     aiFailed?: string;
+    /** 是否需要（在批改收尾后）后台生成参考答案 */
+    wantAnswer?: boolean;
   } = {};
 
   await vscode.window.withProgress(
@@ -1301,42 +1307,13 @@ async function submitLevelInner(
       setStep(idx.save, 'done');
 
       // ★ 批改完顺带给参考答案与改进建议（用户要求：改完要能看到答案和建议）
-      //   只在「没过关」或「有题目没做出来」时自动生成；已有缓存就直接用，不重复烧 token。
-      let answerNote = '';
-      if (aiReady(cfg) && shouldAutoAnswer(r, cfg.passScore)) {
-        setStep(idx.answer, 'running');
-        publish('正在生成参考答案…');
-        const file = answerFilePath(context, level);
-        let md: string | null = null;
-        if (existsSync(file)) {
-          try {
-            md = await fs.readFile(file, 'utf8');
-            answerNote = '这份参考答案之前生成过，直接读取本地文件（想重新生成请点「AI 讲解本关」）。';
-          } catch {
-            md = null;
-          }
-        }
-        if (!md) {
-          try {
-            md = await withDeadline(
-              generateLevelAnswer(level, aiTaskOptions(cfg)),
-              capMs,
-              '参考答案生成'
-            );
-            await saveAnswerFile(context, level, md, cfg.model);
-            answerNote = `已保存到 ${path.relative(workDir(context), file)}，下次直接读本地文件。`;
-          } catch (err: any) {
-            answerNote = `参考答案生成失败：${String(err?.message ?? err).split('\n')[0]}（可以点「AI 讲解本关」重试）`;
-            md = null;
-          }
-        }
-        lastAnswer = md ? { levelId: level.id, markdown: md, note: answerNote } : null;
-        setStep(idx.answer, md ? 'done' : 'failed');
-        if (!md && lastAnswer === null) {
-          aiLog.appendLine(`[参考答案] ${level.id} 生成失败：${answerNote}`);
-        }
-      } else {
-        setStep(idx.answer, 'skipped');
+      //   但**不在批改主流程里等它**：参考答案是又一次模型调用，网关慢的时候
+      //   会拖到看门狗超时（实测：模型 107 秒就返回了，参考答案又卡了几百秒）。
+      //   现在只记下"需要生成"，等批改结果落地后由 generateAnswerInBackground 在后台做。
+      const wantAnswer = aiReady(cfg) && shouldAutoAnswer(r, cfg.passScore);
+      setStep(idx.answer, wantAnswer ? 'pending' : 'skipped');
+      result.wantAnswer = wantAnswer;
+      if (!wantAnswer) {
         lastAnswer = null;
       }
 
@@ -1386,6 +1363,11 @@ async function submitLevelInner(
     return;
   }
 
+  // 批改结果已经落到面板/通知了，参考答案在后台慢慢生成，不挡着学生看成绩
+  if (result.wantAnswer) {
+    void generateAnswerInBackground(level, context, cfg);
+  }
+
   if (result.msg) {
     if (quiet) {
       // 批量补交：不弹需要点确认的对话框，否则会卡在第一个关卡上
@@ -1404,6 +1386,67 @@ async function submitLevelInner(
         `${result.msg}　已附上参考答案与改进建议，见关卡页底部。`
       );
     }
+  }
+}
+
+/**
+ * 后台生成参考答案（不阻塞批改收尾）。
+ *
+ * 与批改主流程解耦的原因：参考答案是**又一次模型调用**，遇到慢网关会拖很久
+ * （实测模型 107 秒返回后，参考答案又卡了几百秒，最后被看门狗中止）。
+ * 现在它有自己的进度通知，生成完直接刷新关卡页底部。
+ */
+async function generateAnswerInBackground(
+  level: Level,
+  context: vscode.ExtensionContext,
+  cfg: CampConfig
+): Promise<void> {
+  const file = answerFilePath(context, level);
+  const capMs = (cfg.aiTimeoutSec * 2 + 60) * 1000;
+  try {
+    let md: string | null = null;
+    let note = '';
+    if (existsSync(file)) {
+      try {
+        md = await fs.readFile(file, 'utf8');
+        note = '这份参考答案之前生成过，直接读取本地文件（想重新生成请点「AI 讲解本关」）。';
+      } catch {
+        md = null;
+      }
+    }
+    if (!md) {
+      md = await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: `AI 正在写第 ${level.day} 关的参考答案…（可以先去写别的，好了会提示）`,
+          cancellable: false,
+        },
+        async () => {
+          const text: string = await withDeadline(
+            generateLevelAnswer(level, aiTaskOptions(cfg)),
+            capMs,
+            '参考答案生成'
+          );
+          await saveAnswerFile(context, level, text, cfg.model);
+          return text;
+        }
+      );
+      note = `已保存到 ${path.relative(workDir(context), file)}，下次直接读本地文件。`;
+    }
+    lastAnswer = md ? { levelId: level.id, markdown: md, note } : null;
+    if (md) {
+      aiLog.appendLine(`[参考答案] ${level.id} 生成完成 · ${md.length} 字符`);
+      if (currentLevelId === level.id) {
+        showLevelPanel(level, context);
+      }
+      void vscode.window.showInformationMessage(`第 ${level.day} 关参考答案已生成（在关卡页底部）。`);
+    }
+  } catch (err: any) {
+    const msg = String(err?.message ?? err).split('\n')[0];
+    aiLog.appendLine(`[参考答案失败] ${level.id}：${msg}`);
+    void vscode.window.showWarningMessage(
+      `第 ${level.day} 关参考答案生成失败：${msg}（可以点「AI 讲解本关」重试）`
+    );
   }
 }
 
@@ -2094,7 +2137,10 @@ function pushChat(role: 'user' | 'assistant' | 'error', content: string): void {
 
 async function openChatPanel(context: vscode.ExtensionContext, level?: Level): Promise<void> {
   const lv = level ?? resolveAnyLevel();
-  if (!chatPanel) {
+  // ★ 面板可能已被用户关掉：此时模块变量里还是那个废对象，
+  //   继续调用会抛 `Webview is disposed`，表现就是「点问 AI 没反应」。
+  //   所以这里既检查"有没有"，也检查"还活着吗"。
+  if (!chatPanel || !chatPanel.isAlive()) {
     chatPanel = ChatPanel.show(context.extensionUri, {
       onAsk: (text) => askQuestion(text, context),
       onClear: () => {

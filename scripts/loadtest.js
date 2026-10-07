@@ -191,6 +191,34 @@ async function main() {
   const badView = viewEvents.filter((v) => v !== viewType);
   ok(badView.length === 0, '激活事件里的视图 ID 正确', badView.join(','));
 
+  console.log('\n=== D2. webview 面板生命周期（关掉后还能再打开） ===');
+  // 真实事故：用户把「问 AI」面板关掉后再点按钮，模块变量里还留着已销毁的面板，
+  // 于是 postMessage 抛 `Webview is disposed`，表现就是"按钮不工作了"。
+  // 这里用替身复现完整流程：打开 → 关掉 → 再打开。
+  const askHandler = stub.__state.commandHandlers['pythonCamp.askQuestion'];
+  ok(typeof askHandler === 'function', '「问 AI」命令已注册（可从测试直接调用）');
+  if (typeof askHandler === 'function') {
+    const before = stub.__state.createdPanels.length;
+    await askHandler();
+    const p1 = stub.__state.createdPanels[stub.__state.createdPanels.length - 1];
+    ok(stub.__state.createdPanels.length === before + 1, '首次点击创建了聊天面板');
+    ok(p1 && !p1.__disposed, '面板处于可用状态');
+
+    // 模拟用户把面板关掉
+    p1.dispose();
+    ok(p1.__disposed, '关闭后替身标记为已销毁');
+
+    let threw = null;
+    try {
+      await askHandler();
+    } catch (e) {
+      threw = e;
+    }
+    const p2 = stub.__state.createdPanels[stub.__state.createdPanels.length - 1];
+    ok(!threw, '★ 关掉面板后再点「问 AI」不再抛 Webview is disposed', threw ? String(threw.message) : '');
+    ok(p2 !== p1 && !p2.__disposed, '★ 关掉面板后会新建面板（而不是复用已销毁的那个）');
+  }
+
   console.log('\n=== E. 题库与资源文件 ===');
   ok(fs.existsSync(path.join(root, 'data', 'levels.json')), 'data/levels.json 存在');
   ok(fs.existsSync(path.join(root, 'media', 'icon.svg')), 'media/icon.svg 存在');

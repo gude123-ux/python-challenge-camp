@@ -64,6 +64,10 @@ const state = {
   activeTextEditor: undefined,
   /** 记录被注册的命令 ID */
   registeredCommands: [],
+  /** id → 处理函数（测试里可直接调用某个命令，绕开 executeCommand 的"只记录"语义） */
+  commandHandlers: {},
+  /** 创建过的 webview 面板（用于断言"关掉之后能重新打开"这类生命周期问题） */
+  createdPanels: [],
   /** 记录被执行过的命令 */
   executedCommands: [],
   /** 记录 registerWebviewViewProvider 的 viewType */
@@ -131,13 +135,66 @@ module.exports = {
       state.registeredViews.push(viewType);
       return noopDisposable;
     },
-    createWebviewPanel: () => ({
-      webview: { html: '', options: {}, onDidReceiveMessage: () => noopDisposable, postMessage: async () => true, cspSource: 'vscode-resource:' },
-      title: '',
-      onDidDispose: () => noopDisposable,
-      reveal() {},
-      dispose() {},
-    }),
+    /**
+     * ★ 真实还原 VS Code 的 webview 面板语义：
+     *   * `dispose()` 之后 `postMessage` / `reveal` 会**抛 `Webview is disposed`**
+     *     （真实 VS Code 就是这样，而"面板被关掉后按钮失灵"这个 bug 正是这么来的）；
+     *   * `dispose()` 会触发 onDidDispose 回调（扩展靠它清理引用）。
+     * 只有替身也这么做，测试才能测出「关掉面板再打开」这类生命周期问题。
+     */
+    createWebviewPanel: (viewType, title, _column, options) => {
+      const disposeListeners = [];
+      let disposed = false;
+      const panel = {
+        viewType,
+        title: title || '',
+        webview: {
+          html: '',
+          options: options || {},
+          cspSource: 'vscode-resource:',
+          asWebviewUri: (u) => u,
+          onDidReceiveMessage: (fn) => {
+            panel.__messageHandler = fn;
+            return noopDisposable;
+          },
+          postMessage: async (m) => {
+            if (disposed) {
+              throw new Error('Webview is disposed');
+            }
+            panel.__posted = panel.__posted || [];
+            panel.__posted.push(m);
+            return true;
+          },
+        },
+        onDidDispose: (fn) => {
+          disposeListeners.push(fn);
+          return noopDisposable;
+        },
+        reveal() {
+          if (disposed) {
+            throw new Error('Webview is disposed');
+          }
+        },
+        dispose() {
+          if (disposed) {
+            return;
+          }
+          disposed = true;
+          for (const fn of disposeListeners) {
+            try {
+              fn();
+            } catch {
+              /* ignore */
+            }
+          }
+        },
+        get __disposed() {
+          return disposed;
+        },
+      };
+      state.createdPanels.push(panel);
+      return panel;
+    },
     withProgress: async (_opts, fn) => fn({ report() {} }, { isCancellationRequested: false, onCancellationRequested: () => noopDisposable }),
     setStatusBarMessage: () => noopDisposable,
   },
@@ -173,6 +230,7 @@ module.exports = {
   commands: {
     registerCommand: (id, fn) => {
       state.registeredCommands.push(id);
+      state.commandHandlers[id] = fn;
       return { dispose() {} };
     },
     executeCommand: async (id, ...args) => {
